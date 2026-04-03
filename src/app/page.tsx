@@ -251,12 +251,18 @@ export default function Dashboard() {
   const uniqueDevices = [...new Set(hourlyData.map(r => r.device))].filter(Boolean).sort()
   const uniqueHours = [...new Set(hourlyData.map(r => r.report_hour))].sort((a, b) => a - b)
 
-  const filteredHourly = hourlyData.filter(r =>
-    (!filters.config || r.config_name === filters.config) &&
-    (!filters.query || r.ads_query === filters.query) &&
-    (!filters.device || r.device === filters.device) &&
-    (!filters.hour || r.report_hour === Number(filters.hour))
-  )
+  const filteredHourly = hourlyData
+    .filter(r =>
+      (!filters.config || r.config_name === filters.config) &&
+      (!filters.query || r.ads_query === filters.query) &&
+      (!filters.device || r.device === filters.device) &&
+      (!filters.hour || r.report_hour === Number(filters.hour))
+    )
+    .sort((a, b) => {
+      if (String(a.report_date) !== String(b.report_date)) return String(a.report_date).localeCompare(String(b.report_date))
+      if (a.report_hour !== b.report_hour) return a.report_hour - b.report_hour
+      return a.config_name.localeCompare(b.config_name)
+    })
 
   const hourlyTotals = filteredHourly.reduce(
     (acc, r) => ({
@@ -508,9 +514,9 @@ export default function Dashboard() {
                 { label: 'Revenue (USD)', value: `$${fmt(hourlyTotals.revenue)}`, amber: true },
                 { label: 'Revenue (EUR)', value: `€${fmt(hourlyTotals.amount_eur)}` },
                 { label: 'Clicks', value: fmtInt(hourlyTotals.clicks) },
-                { label: 'Searches', value: fmtInt(hourlyTotals.searches) },
                 { label: 'Bidded Searches', value: fmtInt(hourlyTotals.bidded_searches) },
-                { label: 'Bidded Results', value: fmtInt(hourlyTotals.bidded_results) },
+                { label: 'RPC', value: hourlyTotals.clicks > 0 ? `$${fmt(hourlyTotals.revenue / hourlyTotals.clicks)}` : '—' },
+                { label: 'CTR', value: hourlyTotals.bidded_searches > 0 ? `${fmt(hourlyTotals.clicks / hourlyTotals.bidded_searches * 100)}%` : '—' },
               ].map(({ label, value, amber }) => (
                 <div key={label} className="summary-cell">
                   <span className="summary-label">{label}</span>
@@ -532,9 +538,9 @@ export default function Dashboard() {
                     <th>Rev (USD)</th>
                     <th>Rev (EUR)</th>
                     <th>Clicks</th>
-                    <th>Searches</th>
                     <th>Bidded Srch</th>
-                    <th>Bidded Res</th>
+                    <th>RPC</th>
+                    <th>CTR</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -553,9 +559,13 @@ export default function Dashboard() {
                       <td className="revenue">${fmt(row.revenue)}</td>
                       <td style={{textAlign:'right', fontFamily:"'DM Mono',monospace", fontSize:13, color:'#a3a3a3'}}>€{fmt(row.amount_eur)}</td>
                       <td className="clicks">{fmtInt(row.clicks)}</td>
-                      <td>{fmtInt(row.searches)}</td>
                       <td>{fmtInt(row.bidded_searches)}</td>
-                      <td>{fmtInt(row.bidded_results)}</td>
+                      <td style={{textAlign:'right', fontFamily:"'DM Mono',monospace", fontSize:13, color:'#c2800a'}}>
+                        {row.clicks > 0 ? `$${fmt(row.revenue / row.clicks)}` : '—'}
+                      </td>
+                      <td style={{textAlign:'right', fontFamily:"'DM Mono',monospace", fontSize:13, color:'#555'}}>
+                        {row.bidded_searches > 0 ? `${fmt(row.clicks / row.bidded_searches * 100)}%` : '—'}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
