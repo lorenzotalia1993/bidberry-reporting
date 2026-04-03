@@ -52,6 +52,7 @@ export async function processJob(jobId: number) {
     ads_query: row.adsQuery || null,
     market: row.market || null,
     device: row.device || null,
+    placement: row.placement || null,
     raw: row,
   }))
 

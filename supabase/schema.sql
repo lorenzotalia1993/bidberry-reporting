@@ -28,6 +28,7 @@ create table if not exists report_data (
   ads_query         text,
   market            text,
   device            text,
+  placement         text,
   raw               jsonb,
   created_at        timestamptz default now()
 );
