@@ -22,6 +22,16 @@ export async function GET(req: NextRequest) {
   const webhookUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/webhook?jobId={JOBID}&jobStatus={JOBSTATUS}&secret=${process.env.CRON_SECRET}`
 
   try {
+    // Don't create a new job if one already exists for this date+breakdown
+    const existing = await sql`
+      SELECT job_id FROM report_jobs
+      WHERE breakdown = ${breakdown} AND date_from = ${date} AND date_to = ${date}
+      LIMIT 1
+    `
+    if (existing.length > 0) {
+      return NextResponse.json({ ok: true, skipped: true, reason: 'already exists', jobId: existing[0].job_id, breakdown, date })
+    }
+
     const { jobId } = await requestReport(date, date, breakdown, webhookUrl)
 
     await sql`
