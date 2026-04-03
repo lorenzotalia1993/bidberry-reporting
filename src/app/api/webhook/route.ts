@@ -57,6 +57,11 @@ export async function processJob(jobId: number) {
   }))
 
   if (toInsert.length > 0) {
+    // Delete existing data for this date+breakdown before inserting new (avoids duplicates from multiple jobs)
+    const dates = [...new Set(toInsert.map(r => r.report_date).filter(Boolean))]
+    if (dates.length > 0) {
+      await sql`DELETE FROM report_data WHERE breakdown = ${breakdown} AND report_date = ANY(${dates})`
+    }
     await sql`INSERT INTO report_data ${sql(toInsert)}`
   }
 
