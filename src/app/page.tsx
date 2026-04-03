@@ -211,6 +211,7 @@ export default function Dashboard() {
   const [hourlyData, setHourlyData] = useState<HourlyRow[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [filters, setFilters] = useState({ config: '', query: '', device: '', hour: '' })
 
   const fetchData = useCallback(async () => {
     if (!range.from || !range.to) return
@@ -233,6 +234,31 @@ export default function Dashboard() {
   useEffect(() => { fetchData() }, [fetchData])
 
   const dailyTotals = dailyData.reduce(
+    (acc, r) => ({
+      revenue: acc.revenue + r.revenue,
+      amount_eur: acc.amount_eur + r.amount_eur,
+      clicks: acc.clicks + r.clicks,
+      searches: acc.searches + r.searches,
+      bidded_searches: acc.bidded_searches + r.bidded_searches,
+      bidded_results: acc.bidded_results + r.bidded_results,
+    }),
+    { revenue: 0, amount_eur: 0, clicks: 0, searches: 0, bidded_searches: 0, bidded_results: 0 }
+  )
+
+  // Hourly filters
+  const uniqueConfigs = [...new Set(hourlyData.map(r => r.config_name))].filter(Boolean).sort()
+  const uniqueQueries = [...new Set(hourlyData.map(r => r.ads_query))].filter(Boolean).sort()
+  const uniqueDevices = [...new Set(hourlyData.map(r => r.device))].filter(Boolean).sort()
+  const uniqueHours = [...new Set(hourlyData.map(r => r.report_hour))].sort((a, b) => a - b)
+
+  const filteredHourly = hourlyData.filter(r =>
+    (!filters.config || r.config_name === filters.config) &&
+    (!filters.query || r.ads_query === filters.query) &&
+    (!filters.device || r.device === filters.device) &&
+    (!filters.hour || r.report_hour === Number(filters.hour))
+  )
+
+  const hourlyTotals = filteredHourly.reduce(
     (acc, r) => ({
       revenue: acc.revenue + r.revenue,
       amount_eur: acc.amount_eur + r.amount_eur,
@@ -350,6 +376,20 @@ export default function Dashboard() {
         .hour-badge { display: inline-flex; align-items: center; justify-content: center;
           width: 32px; height: 20px; background: #f0efe9; border: 1px solid #dddcd8;
           border-radius: 2px; font-size: 11px; color: #888; }
+
+        .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+        .filter-select {
+          height: 34px; padding: 0 10px; background: #fff; border: 1px solid #dddcd8;
+          border-radius: 4px; font-family: 'Syne', sans-serif; font-size: 11px; font-weight: 600;
+          color: #555; cursor: pointer; letter-spacing: 0.04em; appearance: none;
+          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23aaa'/%3E%3C/svg%3E");
+          background-repeat: no-repeat; background-position: right 8px center; padding-right: 24px;
+        }
+        .filter-select:focus { outline: none; border-color: #1a1a1a; }
+        .filter-clear { height: 34px; padding: 0 12px; background: transparent; border: 1px solid #dddcd8;
+          border-radius: 4px; font-family: 'Syne', sans-serif; font-size: 11px; font-weight: 700;
+          color: #aaa; cursor: pointer; letter-spacing: 0.06em; text-transform: uppercase; }
+        .filter-clear:hover { color: #555; border-color: #999; }
       `}</style>
 
       <div className="shell">
@@ -438,48 +478,90 @@ export default function Dashboard() {
         )}
 
         {breakdown === 'hourly' && (
-          <div className="table-wrap" style={{ marginTop: 24 }}>
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Hour</th>
-                  <th>Config</th>
-                  <th>Market</th>
-                  <th>Device</th>
-                  <th>Query</th>
-                  <th>Rev (USD)</th>
-                  <th>Rev (EUR)</th>
-                  <th>Clicks</th>
-                  <th>Searches</th>
-                  <th>Bidded Srch</th>
-                  <th>Bidded Res</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading ? (
-                  <tr><td colSpan={12}><div className="state-row"><span className="spinner" />Loading…</div></td></tr>
-                ) : hourlyData.length === 0 ? (
-                  <tr><td colSpan={12}><div className="state-row">No data for this period</div></td></tr>
-                ) : hourlyData.map((row, i) => (
-                  <tr key={i}>
-                    <td style={{ fontFamily:"'DM Mono',monospace", textAlign:'left', color:'#666' }}>{row.report_date}</td>
-                    <td><span className="hour-badge">{String(row.report_hour).padStart(2,'0')}</span></td>
-                    <td style={{ textAlign:'left' }}><span className="config-tag">{row.config_name}</span></td>
-                    <td style={{textAlign:'left', color:'#666', fontSize:12}}>{row.market}</td>
-                    <td style={{textAlign:'left', color:'#666', fontSize:12}}>{row.device}</td>
-                    <td style={{textAlign:'left', fontFamily:"'DM Mono',monospace", fontSize:12, color:'#aaa', maxWidth:160, overflow:'hidden', textOverflow:'ellipsis'}}>{row.ads_query}</td>
-                    <td className="revenue">${fmt(row.revenue)}</td>
-                    <td style={{textAlign:'right', fontFamily:"'DM Mono',monospace", fontSize:13, color:'#a3a3a3'}}>€{fmt(row.amount_eur)}</td>
-                    <td className="clicks">{fmtInt(row.clicks)}</td>
-                    <td>{fmtInt(row.searches)}</td>
-                    <td>{fmtInt(row.bidded_searches)}</td>
-                    <td>{fmtInt(row.bidded_results)}</td>
+          <>
+            {/* Filters */}
+            <div className="filters">
+              <select className="filter-select" value={filters.config} onChange={e => setFilters(f => ({ ...f, config: e.target.value }))}>
+                <option value="">All Configs</option>
+                {uniqueConfigs.map(v => <option key={v} value={v}>{v}</option>)}
+              </select>
+              <select className="filter-select" value={filters.query} onChange={e => setFilters(f => ({ ...f, query: e.target.value }))}>
+                <option value="">All Queries</option>
+                {uniqueQueries.map(v => <option key={v} value={v}>{v}</option>)}
+              </select>
+              <select className="filter-select" value={filters.device} onChange={e => setFilters(f => ({ ...f, device: e.target.value }))}>
+                <option value="">All Devices</option>
+                {uniqueDevices.map(v => <option key={v} value={v}>{v}</option>)}
+              </select>
+              <select className="filter-select" value={filters.hour} onChange={e => setFilters(f => ({ ...f, hour: e.target.value }))}>
+                <option value="">All Hours</option>
+                {uniqueHours.map(h => <option key={h} value={h}>{String(h).padStart(2,'0')}:00</option>)}
+              </select>
+              {(filters.config || filters.query || filters.device || filters.hour) && (
+                <button className="filter-clear" onClick={() => setFilters({ config: '', query: '', device: '', hour: '' })}>Clear</button>
+              )}
+            </div>
+
+            {/* Totals */}
+            <div className="summary">
+              {[
+                { label: 'Revenue (USD)', value: `$${fmt(hourlyTotals.revenue)}`, amber: true },
+                { label: 'Revenue (EUR)', value: `€${fmt(hourlyTotals.amount_eur)}` },
+                { label: 'Clicks', value: fmtInt(hourlyTotals.clicks) },
+                { label: 'Searches', value: fmtInt(hourlyTotals.searches) },
+                { label: 'Bidded Searches', value: fmtInt(hourlyTotals.bidded_searches) },
+                { label: 'Bidded Results', value: fmtInt(hourlyTotals.bidded_results) },
+              ].map(({ label, value, amber }) => (
+                <div key={label} className="summary-cell">
+                  <span className="summary-label">{label}</span>
+                  <span className={`summary-value${amber ? ' amber' : ''}`}>{value}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Hour</th>
+                    <th>Config</th>
+                    <th>Market</th>
+                    <th>Device</th>
+                    <th>Query</th>
+                    <th>Rev (USD)</th>
+                    <th>Rev (EUR)</th>
+                    <th>Clicks</th>
+                    <th>Searches</th>
+                    <th>Bidded Srch</th>
+                    <th>Bidded Res</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    <tr><td colSpan={12}><div className="state-row"><span className="spinner" />Loading…</div></td></tr>
+                  ) : filteredHourly.length === 0 ? (
+                    <tr><td colSpan={12}><div className="state-row">No data for this period</div></td></tr>
+                  ) : filteredHourly.map((row, i) => (
+                    <tr key={i}>
+                      <td style={{ fontFamily:"'DM Mono',monospace", textAlign:'left', color:'#666' }}>{String(row.report_date).split('T')[0]}</td>
+                      <td><span className="hour-badge">{String(row.report_hour).padStart(2,'0')}</span></td>
+                      <td style={{ textAlign:'left' }}><span className="config-tag">{row.config_name}</span></td>
+                      <td style={{textAlign:'left', color:'#666', fontSize:12}}>{row.market}</td>
+                      <td style={{textAlign:'left', color:'#666', fontSize:12}}>{row.device}</td>
+                      <td style={{textAlign:'left', fontFamily:"'DM Mono',monospace", fontSize:12, color:'#aaa', maxWidth:160, overflow:'hidden', textOverflow:'ellipsis'}}>{row.ads_query}</td>
+                      <td className="revenue">${fmt(row.revenue)}</td>
+                      <td style={{textAlign:'right', fontFamily:"'DM Mono',monospace", fontSize:13, color:'#a3a3a3'}}>€{fmt(row.amount_eur)}</td>
+                      <td className="clicks">{fmtInt(row.clicks)}</td>
+                      <td>{fmtInt(row.searches)}</td>
+                      <td>{fmtInt(row.bidded_searches)}</td>
+                      <td>{fmtInt(row.bidded_results)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
     </>
