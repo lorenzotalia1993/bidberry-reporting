@@ -1,9 +1,14 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import {
+  LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
+  ResponsiveContainer, CartesianGrid, AreaChart, Area, Cell,
+} from 'recharts'
 
 // ── Types ──────────────────────────────────────────────────────────
 type Breakdown = 'daily' | 'hourly'
+type ActiveTab = 'daily' | 'hourly' | 'analytics'
 
 interface DailyRow {
   config_name: string
@@ -21,6 +26,14 @@ interface DailyRow {
 interface HourlyRow extends DailyRow {
   report_date: string
   report_hour: number
+}
+
+interface TrendRow {
+  report_date: string
+  revenue: number
+  clicks: number
+  searches: number
+  bidded_searches: number
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -196,6 +209,37 @@ function DatePicker({ label, value, onChange, maxDate, onShortcut }: {
   )
 }
 
+// ── Chart Tooltip ──────────────────────────────────────────────────
+function ChartTooltip({ active, payload, label, valueFormatter }: {
+  active?: boolean
+  payload?: Array<{ value: number; name: string; color: string }>
+  label?: string
+  valueFormatter?: (v: number, name: string) => string
+}) {
+  if (!active || !payload?.length) return null
+  return (
+    <div style={{
+      background: '#fff', border: '1px solid #dddcd8', borderRadius: 4,
+      padding: '8px 12px', fontFamily: "'DM Mono',monospace", fontSize: 12,
+      boxShadow: '0 4px 16px rgba(0,0,0,0.07)',
+    }}>
+      {label && (
+        <div style={{ color: '#aaa', fontSize: 9, marginBottom: 6, fontFamily: "'Syne',sans-serif",
+          letterSpacing: '0.1em', textTransform: 'uppercase' }}>{label}</div>
+      )}
+      {payload.map(p => (
+        <div key={p.name} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 2 }}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: p.color, flexShrink: 0 }} />
+          <span style={{ color: '#888', fontSize: 11 }}>{p.name}:</span>
+          <span style={{ color: '#1a1a1a', fontWeight: 500 }}>
+            {valueFormatter ? valueFormatter(p.value, p.name) : p.value}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ── Main Dashboard ─────────────────────────────────────────────────
 function defaultRange() {
   const to = new Date()
@@ -206,12 +250,15 @@ function defaultRange() {
 
 export default function Dashboard() {
   const [breakdown, setBreakdown] = useState<Breakdown>('daily')
+  const [activeTab, setActiveTab] = useState<ActiveTab>('daily')
   const [range, setRange] = useState(defaultRange)
   const [dailyData, setDailyData] = useState<DailyRow[]>([])
   const [hourlyData, setHourlyData] = useState<HourlyRow[]>([])
+  const [trendData, setTrendData] = useState<TrendRow[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [filters, setFilters] = useState({ config: '', query: '', device: '', hour: '' })
+  const [dailyFilters, setDailyFilters] = useState({ config: '', query: '' })
 
   const fetchData = useCallback(async () => {
     if (!range.from || !range.to) return
@@ -233,7 +280,83 @@ export default function Dashboard() {
 
   useEffect(() => { fetchData() }, [fetchData])
 
-  const dailyTotals = dailyData.reduce(
+  // Always fetch daily + trend data for analytics tab
+  useEffect(() => {
+    if (!range.from || !range.to) return
+    fetch(`/api/report-data?${new URLSearchParams({ from: range.from, to: range.to, breakdown: 'daily' })}`)
+      .then(r => r.json()).then(setDailyData).catch(() => {})
+    fetch(`/api/report-data?${new URLSearchParams({ from: range.from, to: range.to, breakdown: 'trend' })}`)
+      .then(r => r.json()).then(setTrendData).catch(() => {})
+  }, [range.from, range.to])
+
+  // ── Analytics computed data ────────────────────────────────────
+  const revenueByDate = useMemo(() =>
+    trendData.map(r => ({
+      date: r.report_date.slice(5), // MM-DD
+      revenue: r.revenue,
+      myRevenue: parseFloat((r.revenue * 0.2).toFixed(4)),
+    }))
+  , [trendData])
+
+  const trafficByDate = useMemo(() =>
+    trendData.map(r => ({
+      date: r.report_date.slice(5),
+      clicks: r.clicks,
+      searches: r.searches,
+    }))
+  , [trendData])
+
+  const queryRPCData = useMemo(() => {
+    const grouped: Record<string, { revenue: number; clicks: number }> = {}
+    dailyData.forEach(r => {
+      if (!r.ads_query) return
+      if (!grouped[r.ads_query]) grouped[r.ads_query] = { revenue: 0, clicks: 0 }
+      grouped[r.ads_query].revenue += r.revenue
+      grouped[r.ads_query].clicks += r.clicks
+    })
+    return Object.entries(grouped)
+      .filter(([, v]) => v.clicks >= 3)
+      .map(([query, v]) => ({
+        query,
+        queryShort: query.length > 28 ? query.slice(0, 26) + '…' : query,
+        rpc: v.clicks > 0 ? v.revenue / v.clicks : 0,
+        revenue: v.revenue,
+        clicks: v.clicks,
+      }))
+      .sort((a, b) => b.rpc - a.rpc)
+  }, [dailyData])
+
+  const queryRPCWithColors = useMemo(() => {
+    if (!queryRPCData.length) return []
+    const n = queryRPCData.length
+    return queryRPCData.map((q, i) => ({
+      ...q,
+      color: i < Math.ceil(n * 0.25)
+        ? '#22c55e'
+        : i >= Math.floor(n * 0.75)
+          ? '#ef4444'
+          : '#c2800a',
+    }))
+  }, [queryRPCData])
+
+  const pushQueries = useMemo(() =>
+    queryRPCWithColors.filter(q => q.color === '#22c55e').slice(0, 5)
+  , [queryRPCWithColors])
+
+  const stopQueries = useMemo(() =>
+    queryRPCWithColors.filter(q => q.color === '#ef4444').slice(-5).reverse()
+  , [queryRPCWithColors])
+
+  // ── Daily/Hourly derived ──────────────────────────────────────
+  const uniqueDailyConfigs = [...new Set(dailyData.map(r => r.config_name))].filter(Boolean).sort()
+  const uniqueDailyQueries = [...new Set(dailyData.map(r => r.ads_query))].filter(Boolean).sort()
+
+  const filteredDaily = dailyData.filter(r =>
+    (!dailyFilters.config || r.config_name === dailyFilters.config) &&
+    (!dailyFilters.query || r.ads_query === dailyFilters.query)
+  )
+
+  const dailyTotals = filteredDaily.reduce(
     (acc, r) => ({
       revenue: acc.revenue + r.revenue,
       amount_eur: acc.amount_eur + r.amount_eur,
@@ -345,6 +468,14 @@ export default function Dashboard() {
         @media (min-width: 640px) { .summary-value { font-size: 22px; } }
         .summary-value.amber { color: #c2800a; }
 
+        .my-cut {
+          display: flex; align-items: center; gap: 6px; justify-content: flex-end;
+          margin-top: 8px; padding-right: 2px;
+        }
+        .my-cut-label { font-size: 9px; font-weight: 600; letter-spacing: 0.12em;
+          text-transform: uppercase; color: #bbb; font-family: 'Syne', sans-serif; }
+        .my-cut-value { font-family: 'DM Mono', monospace; font-size: 12px; color: #999; }
+
         .table-wrap { margin-top: 2px; border: 1px solid #e0dfd9; border-radius: 4px;
           overflow-x: auto; -webkit-overflow-scrolling: touch; }
         table { width: 100%; border-collapse: collapse; min-width: 600px; }
@@ -396,6 +527,79 @@ export default function Dashboard() {
           border-radius: 4px; font-family: 'Syne', sans-serif; font-size: 11px; font-weight: 700;
           color: #aaa; cursor: pointer; letter-spacing: 0.06em; text-transform: uppercase; }
         .filter-clear:hover { color: #555; border-color: #999; }
+
+        /* ── Analytics ─────────────────────────────── */
+        .analytics-grid {
+          display: grid; grid-template-columns: 1fr; gap: 16px; margin-top: 20px;
+        }
+        @media (min-width: 900px) { .analytics-grid { grid-template-columns: 1fr 1fr; } }
+
+        .chart-card {
+          background: #fff; border: 1px solid #e0dfd9; border-radius: 4px;
+          padding: 20px 20px 16px;
+        }
+        .chart-card.full { grid-column: 1 / -1; }
+
+        .chart-title {
+          font-size: 10px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase;
+          color: #888; margin-bottom: 16px;
+        }
+        .chart-title span { color: #1a1a1a; }
+
+        .push-stop-grid {
+          display: grid; grid-template-columns: 1fr; gap: 16px; margin-top: 16px;
+        }
+        @media (min-width: 700px) { .push-stop-grid { grid-template-columns: 1fr 1fr; } }
+
+        .signal-card {
+          background: #fff; border: 1px solid #e0dfd9; border-radius: 4px; overflow: hidden;
+        }
+        .signal-header {
+          padding: 12px 16px; font-size: 10px; font-weight: 700; letter-spacing: 0.14em;
+          text-transform: uppercase; display: flex; align-items: center; gap: 8px;
+        }
+        .signal-header.push { background: #f0fdf4; color: #16a34a; border-bottom: 1px solid #dcfce7; }
+        .signal-header.stop { background: #fef2f2; color: #dc2626; border-bottom: 1px solid #fecaca; }
+        .signal-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+        .signal-row {
+          padding: 10px 16px; border-bottom: 1px solid #f5f4f0; display: flex;
+          align-items: center; gap: 8px;
+        }
+        .signal-row:last-child { border-bottom: none; }
+        .signal-rank {
+          font-family: 'DM Mono', monospace; font-size: 10px; color: #ccc;
+          width: 16px; flex-shrink: 0;
+        }
+        .signal-query {
+          font-family: 'DM Mono', monospace; font-size: 11px; color: #555;
+          flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .signal-rpc {
+          font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 500;
+          flex-shrink: 0;
+        }
+        .signal-meta {
+          font-family: 'DM Mono', monospace; font-size: 10px; color: #bbb;
+          flex-shrink: 0;
+        }
+
+        .analytics-empty {
+          text-align: center; padding: 64px 0; color: #bbb;
+          font-size: 13px; letter-spacing: 0.06em;
+        }
+
+        .legend { display: flex; gap: 16px; margin-bottom: 12px; flex-wrap: wrap; }
+        .legend-item { display: flex; align-items: center; gap: 6px; }
+        .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+        .legend-label { font-size: 10px; color: #888; font-family: 'Syne', sans-serif;
+          font-weight: 600; letter-spacing: 0.08em; }
+
+        .rpc-legend { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+        .rpc-legend-item { display: flex; align-items: center; gap: 5px;
+          font-size: 9px; color: #999; font-family: 'Syne', sans-serif;
+          font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; }
+        .rpc-legend-swatch { width: 10px; height: 10px; border-radius: 2px; }
       `}</style>
 
       <div className="shell">
@@ -419,22 +623,47 @@ export default function Dashboard() {
         </header>
 
         <div className="tabs">
-          <button className={`tab ${breakdown === 'daily' ? 'active' : ''}`} onClick={() => setBreakdown('daily')}>Daily</button>
-          <button className={`tab ${breakdown === 'hourly' ? 'active' : ''}`} onClick={() => setBreakdown('hourly')}>Hourly</button>
+          <button
+            className={`tab ${activeTab === 'daily' ? 'active' : ''}`}
+            onClick={() => { setActiveTab('daily'); setBreakdown('daily') }}
+          >Daily</button>
+          <button
+            className={`tab ${activeTab === 'hourly' ? 'active' : ''}`}
+            onClick={() => { setActiveTab('hourly'); setBreakdown('hourly') }}
+          >Hourly</button>
+          <button
+            className={`tab ${activeTab === 'analytics' ? 'active' : ''}`}
+            onClick={() => setActiveTab('analytics')}
+          >Analytics</button>
         </div>
 
         {error && <div className="error-msg">{error}</div>}
 
-        {breakdown === 'daily' && (
+        {activeTab === 'daily' && (
           <>
+            {/* Daily Filters */}
+            <div className="filters">
+              <select className="filter-select" value={dailyFilters.config} onChange={e => setDailyFilters(f => ({ ...f, config: e.target.value }))}>
+                <option value="">All Domains</option>
+                {uniqueDailyConfigs.map(v => <option key={v} value={v}>{v}</option>)}
+              </select>
+              <select className="filter-select" value={dailyFilters.query} onChange={e => setDailyFilters(f => ({ ...f, query: e.target.value }))}>
+                <option value="">All Queries</option>
+                {uniqueDailyQueries.map(v => <option key={v} value={v}>{v}</option>)}
+              </select>
+              {(dailyFilters.config || dailyFilters.query) && (
+                <button className="filter-clear" onClick={() => setDailyFilters({ config: '', query: '' })}>Clear</button>
+              )}
+            </div>
+
             <div className="summary">
               {[
                 { label: 'Revenue (USD)', value: `$${fmt(dailyTotals.revenue)}`, amber: true },
-                { label: 'Revenue (EUR)', value: `€${fmt(dailyTotals.amount_eur)}` },
                 { label: 'Clicks', value: fmtInt(dailyTotals.clicks) },
                 { label: 'Searches', value: fmtInt(dailyTotals.searches) },
-                { label: 'Bidded Searches', value: fmtInt(dailyTotals.bidded_searches) },
-                { label: 'Bidded Results', value: fmtInt(dailyTotals.bidded_results) },
+                { label: 'RPC', value: dailyTotals.clicks > 0 ? `$${fmt(dailyTotals.revenue / dailyTotals.clicks)}` : '—' },
+                { label: 'CTR', value: dailyTotals.bidded_searches > 0 ? `${fmt(dailyTotals.clicks / dailyTotals.bidded_searches * 100)}%` : '—' },
+                { label: 'RPM', value: dailyTotals.searches > 0 ? `$${fmt(dailyTotals.revenue / dailyTotals.searches * 1000)}` : '—' },
               ].map(({ label, value, amber }) => (
                 <div key={label} className="summary-cell">
                   <span className="summary-label">{label}</span>
@@ -442,6 +671,12 @@ export default function Dashboard() {
                 </div>
               ))}
             </div>
+
+            <div className="my-cut">
+              <span className="my-cut-label">my cut (20%)</span>
+              <span className="my-cut-value">${fmt(dailyTotals.revenue * 0.2)}</span>
+            </div>
+
             <div className="table-wrap">
               <table>
                 <thead>
@@ -451,30 +686,38 @@ export default function Dashboard() {
                     <th>Device</th>
                     <th>Query</th>
                     <th>Rev (USD)</th>
-                    <th>Rev (EUR)</th>
                     <th>Clicks</th>
                     <th>Searches</th>
                     <th>Bidded Srch</th>
-                    <th>Bidded Res</th>
+                    <th>RPC</th>
+                    <th>CTR</th>
+                    <th>RPM</th>
                   </tr>
                 </thead>
                 <tbody>
                   {loading ? (
-                    <tr><td colSpan={10}><div className="state-row"><span className="spinner" />Loading…</div></td></tr>
-                  ) : dailyData.length === 0 ? (
-                    <tr><td colSpan={10}><div className="state-row">No data for this period</div></td></tr>
-                  ) : dailyData.map((row, i) => (
+                    <tr><td colSpan={11}><div className="state-row"><span className="spinner" />Loading…</div></td></tr>
+                  ) : filteredDaily.length === 0 ? (
+                    <tr><td colSpan={11}><div className="state-row">No data for this period</div></td></tr>
+                  ) : filteredDaily.map((row, i) => (
                     <tr key={i}>
                       <td><span className="config-tag">{row.config_name}</span></td>
                       <td style={{textAlign:'left', color:'#666', fontSize:12}}>{row.market}</td>
                       <td style={{textAlign:'left', color:'#666', fontSize:12}}>{row.device}</td>
                       <td style={{textAlign:'left', fontFamily:"'DM Mono',monospace", fontSize:12, color:'#aaa', maxWidth:200, overflow:'hidden', textOverflow:'ellipsis'}}>{row.ads_query}</td>
                       <td className="revenue">${fmt(row.revenue)}</td>
-                      <td style={{textAlign:'right', fontFamily:"'DM Mono',monospace", fontSize:13, color:'#a3a3a3'}}>€{fmt(row.amount_eur)}</td>
                       <td className="clicks">{fmtInt(row.clicks)}</td>
                       <td>{fmtInt(row.searches)}</td>
                       <td>{fmtInt(row.bidded_searches)}</td>
-                      <td>{fmtInt(row.bidded_results)}</td>
+                      <td style={{textAlign:'right', fontFamily:"'DM Mono',monospace", fontSize:13, color:'#c2800a'}}>
+                        {row.clicks > 0 ? `$${fmt(row.revenue / row.clicks)}` : '—'}
+                      </td>
+                      <td style={{textAlign:'right', fontFamily:"'DM Mono',monospace", fontSize:13, color:'#555'}}>
+                        {row.bidded_searches > 0 ? `${fmt(row.clicks / row.bidded_searches * 100)}%` : '—'}
+                      </td>
+                      <td style={{textAlign:'right', fontFamily:"'DM Mono',monospace", fontSize:13, color:'#888'}}>
+                        {row.searches > 0 ? `$${fmt(row.revenue / row.searches * 1000)}` : '—'}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -483,7 +726,7 @@ export default function Dashboard() {
           </>
         )}
 
-        {breakdown === 'hourly' && (
+        {activeTab === 'hourly' && (
           <>
             {/* Filters */}
             <div className="filters">
@@ -512,17 +755,22 @@ export default function Dashboard() {
             <div className="summary">
               {[
                 { label: 'Revenue (USD)', value: `$${fmt(hourlyTotals.revenue)}`, amber: true },
-                { label: 'Revenue (EUR)', value: `€${fmt(hourlyTotals.amount_eur)}` },
                 { label: 'Clicks', value: fmtInt(hourlyTotals.clicks) },
                 { label: 'Bidded Searches', value: fmtInt(hourlyTotals.bidded_searches) },
                 { label: 'RPC', value: hourlyTotals.clicks > 0 ? `$${fmt(hourlyTotals.revenue / hourlyTotals.clicks)}` : '—' },
                 { label: 'CTR', value: hourlyTotals.bidded_searches > 0 ? `${fmt(hourlyTotals.clicks / hourlyTotals.bidded_searches * 100)}%` : '—' },
+                { label: 'RPM', value: hourlyTotals.searches > 0 ? `$${fmt(hourlyTotals.revenue / hourlyTotals.searches * 1000)}` : '—' },
               ].map(({ label, value, amber }) => (
                 <div key={label} className="summary-cell">
                   <span className="summary-label">{label}</span>
                   <span className={`summary-value${amber ? ' amber' : ''}`}>{value}</span>
                 </div>
               ))}
+            </div>
+
+            <div className="my-cut">
+              <span className="my-cut-label">my cut (20%)</span>
+              <span className="my-cut-value">${fmt(hourlyTotals.revenue * 0.2)}</span>
             </div>
 
             <div className="table-wrap">
@@ -536,11 +784,11 @@ export default function Dashboard() {
                     <th>Device</th>
                     <th>Query</th>
                     <th>Rev (USD)</th>
-                    <th>Rev (EUR)</th>
                     <th>Clicks</th>
                     <th>Bidded Srch</th>
                     <th>RPC</th>
                     <th>CTR</th>
+                    <th>RPM</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -557,7 +805,6 @@ export default function Dashboard() {
                       <td style={{textAlign:'left', color:'#666', fontSize:12}}>{row.device}</td>
                       <td style={{textAlign:'left', fontFamily:"'DM Mono',monospace", fontSize:12, color:'#aaa', maxWidth:160, overflow:'hidden', textOverflow:'ellipsis'}}>{row.ads_query}</td>
                       <td className="revenue">${fmt(row.revenue)}</td>
-                      <td style={{textAlign:'right', fontFamily:"'DM Mono',monospace", fontSize:13, color:'#a3a3a3'}}>€{fmt(row.amount_eur)}</td>
                       <td className="clicks">{fmtInt(row.clicks)}</td>
                       <td>{fmtInt(row.bidded_searches)}</td>
                       <td style={{textAlign:'right', fontFamily:"'DM Mono',monospace", fontSize:13, color:'#c2800a'}}>
@@ -566,11 +813,185 @@ export default function Dashboard() {
                       <td style={{textAlign:'right', fontFamily:"'DM Mono',monospace", fontSize:13, color:'#555'}}>
                         {row.bidded_searches > 0 ? `${fmt(row.clicks / row.bidded_searches * 100)}%` : '—'}
                       </td>
+                      <td style={{textAlign:'right', fontFamily:"'DM Mono',monospace", fontSize:13, color:'#888'}}>
+                        {row.searches > 0 ? `$${fmt(row.revenue / row.searches * 1000)}` : '—'}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+          </>
+        )}
+
+        {activeTab === 'analytics' && (
+          <>
+            {trendData.length === 0 && queryRPCData.length === 0 ? (
+              <div className="analytics-empty">No data for this period</div>
+            ) : (
+              <>
+                {/* Row 1: Revenue + Traffic trends */}
+                <div className="analytics-grid">
+                  {/* Revenue Over Time */}
+                  <div className="chart-card">
+                    <div className="chart-title">Revenue Over Time <span style={{color:'#aaa', fontWeight:400, textTransform:'none', letterSpacing:0}}>(USD)</span></div>
+                    <div className="legend">
+                      <div className="legend-item">
+                        <div className="legend-dot" style={{background:'#c2800a'}} />
+                        <span className="legend-label">Total Revenue</span>
+                      </div>
+                      <div className="legend-item">
+                        <div className="legend-dot" style={{background:'#d4b896', border:'1px dashed #c2800a'}} />
+                        <span className="legend-label">My Cut (20%)</span>
+                      </div>
+                    </div>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <LineChart data={revenueByDate} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0efe9" />
+                        <XAxis dataKey="date" tick={{ fontFamily: "'DM Mono',monospace", fontSize: 10, fill: '#aaa' }} tickLine={false} axisLine={false} />
+                        <YAxis tick={{ fontFamily: "'DM Mono',monospace", fontSize: 10, fill: '#aaa' }} tickLine={false} axisLine={false} tickFormatter={v => `$${v.toFixed(0)}`} width={48} />
+                        <Tooltip content={<ChartTooltip valueFormatter={(v) => `$${fmt(v)}`} />} />
+                        <Line type="monotone" dataKey="revenue" name="Revenue" stroke="#c2800a" strokeWidth={2} dot={false} />
+                        <Line type="monotone" dataKey="myRevenue" name="My cut" stroke="#d4b896" strokeWidth={1.5} strokeDasharray="4 3" dot={false} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* Traffic Over Time */}
+                  <div className="chart-card">
+                    <div className="chart-title">Traffic Over Time</div>
+                    <div className="legend">
+                      <div className="legend-item">
+                        <div className="legend-dot" style={{background:'#1a1a1a'}} />
+                        <span className="legend-label">Clicks</span>
+                      </div>
+                      <div className="legend-item">
+                        <div className="legend-dot" style={{background:'#c8c7c0'}} />
+                        <span className="legend-label">Searches</span>
+                      </div>
+                    </div>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <AreaChart data={trafficByDate} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0efe9" />
+                        <XAxis dataKey="date" tick={{ fontFamily: "'DM Mono',monospace", fontSize: 10, fill: '#aaa' }} tickLine={false} axisLine={false} />
+                        <YAxis tick={{ fontFamily: "'DM Mono',monospace", fontSize: 10, fill: '#aaa' }} tickLine={false} axisLine={false} tickFormatter={v => fmtInt(v)} width={48} />
+                        <Tooltip content={<ChartTooltip valueFormatter={(v) => fmtInt(v)} />} />
+                        <Area type="monotone" dataKey="searches" name="Searches" stroke="#e0dfd9" fill="#f5f4f0" strokeWidth={1.5} />
+                        <Area type="monotone" dataKey="clicks" name="Clicks" stroke="#1a1a1a" fill="#e8e7e2" strokeWidth={2} />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* Row 2: Query RPC Ranking */}
+                {queryRPCWithColors.length > 0 && (
+                  <div className="chart-card full" style={{ marginTop: 16 }}>
+                    <div className="chart-title">Query RPC Ranking — <span>top {Math.min(queryRPCWithColors.length, 20)} queries by revenue per click</span></div>
+                    <div className="rpc-legend">
+                      <div className="rpc-legend-item">
+                        <div className="rpc-legend-swatch" style={{background:'#22c55e'}} />
+                        Push (top 25%)
+                      </div>
+                      <div className="rpc-legend-item">
+                        <div className="rpc-legend-swatch" style={{background:'#c2800a'}} />
+                        Monitor (mid 50%)
+                      </div>
+                      <div className="rpc-legend-item">
+                        <div className="rpc-legend-swatch" style={{background:'#ef4444'}} />
+                        Stop (bottom 25%)
+                      </div>
+                    </div>
+                    <ResponsiveContainer width="100%" height={Math.max(180, Math.min(queryRPCWithColors.length, 20) * 28)}>
+                      <BarChart
+                        layout="vertical"
+                        data={queryRPCWithColors.slice(0, 20)}
+                        margin={{ top: 0, right: 48, bottom: 0, left: 8 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f5f4f0" horizontal={false} />
+                        <XAxis
+                          type="number"
+                          tick={{ fontFamily: "'DM Mono',monospace", fontSize: 10, fill: '#aaa' }}
+                          tickLine={false} axisLine={false}
+                          tickFormatter={v => `$${v.toFixed(3)}`}
+                        />
+                        <YAxis
+                          type="category"
+                          dataKey="queryShort"
+                          width={160}
+                          tick={{ fontFamily: "'DM Mono',monospace", fontSize: 10, fill: '#666' }}
+                          tickLine={false} axisLine={false}
+                        />
+                        <Tooltip
+                          content={({ active, payload }) => {
+                            if (!active || !payload?.length) return null
+                            const d = payload[0].payload
+                            return (
+                              <div style={{
+                                background: '#fff', border: '1px solid #dddcd8', borderRadius: 4,
+                                padding: '8px 12px', fontFamily: "'DM Mono',monospace", fontSize: 12,
+                                boxShadow: '0 4px 16px rgba(0,0,0,0.07)', maxWidth: 260,
+                              }}>
+                                <div style={{ color: '#555', fontSize: 11, marginBottom: 6, wordBreak: 'break-all' }}>{d.query}</div>
+                                <div style={{ color: '#c2800a' }}>RPC: ${fmt(d.rpc)}</div>
+                                <div style={{ color: '#888', fontSize: 11 }}>Revenue: ${fmt(d.revenue)} · Clicks: {fmtInt(d.clicks)}</div>
+                              </div>
+                            )
+                          }}
+                        />
+                        <Bar dataKey="rpc" name="RPC" radius={[0, 2, 2, 0]}>
+                          {queryRPCWithColors.slice(0, 20).map((entry, i) => (
+                            <Cell key={i} fill={entry.color} fillOpacity={0.85} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+
+                {/* Row 3: Push / Stop signals */}
+                {(pushQueries.length > 0 || stopQueries.length > 0) && (
+                  <div className="push-stop-grid">
+                    {/* Push */}
+                    <div className="signal-card">
+                      <div className="signal-header push">
+                        <div className="signal-dot" style={{ background: '#22c55e' }} />
+                        Queries to Push
+                        <span style={{ fontWeight: 400, opacity: 0.7, marginLeft: 4 }}>— high RPC, scale up</span>
+                      </div>
+                      {pushQueries.length === 0 ? (
+                        <div style={{ padding: '16px', color: '#bbb', fontSize: 12, fontFamily: "'Syne',sans-serif" }}>Not enough data</div>
+                      ) : pushQueries.map((q, i) => (
+                        <div key={i} className="signal-row">
+                          <span className="signal-rank">#{i + 1}</span>
+                          <span className="signal-query">{q.query}</span>
+                          <span className="signal-rpc" style={{ color: '#16a34a' }}>${fmt(q.rpc)}</span>
+                          <span className="signal-meta">{fmtInt(q.clicks)} clk</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Stop */}
+                    <div className="signal-card">
+                      <div className="signal-header stop">
+                        <div className="signal-dot" style={{ background: '#ef4444' }} />
+                        Queries to Stop
+                        <span style={{ fontWeight: 400, opacity: 0.7, marginLeft: 4 }}>— low RPC, cut spend</span>
+                      </div>
+                      {stopQueries.length === 0 ? (
+                        <div style={{ padding: '16px', color: '#bbb', fontSize: 12, fontFamily: "'Syne',sans-serif" }}>Not enough data</div>
+                      ) : stopQueries.map((q, i) => (
+                        <div key={i} className="signal-row">
+                          <span className="signal-rank">#{i + 1}</span>
+                          <span className="signal-query">{q.query}</span>
+                          <span className="signal-rpc" style={{ color: '#dc2626' }}>${fmt(q.rpc)}</span>
+                          <span className="signal-meta">{fmtInt(q.clicks)} clk</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </>
         )}
       </div>

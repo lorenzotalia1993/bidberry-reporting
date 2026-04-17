@@ -36,6 +36,7 @@ export async function GET(req: NextRequest) {
   const from = searchParams.get('from')
   const to = searchParams.get('to')
   const breakdown = searchParams.get('breakdown') ?? 'daily'
+  const dbBreakdown = breakdown === 'trend' ? 'daily' : breakdown
 
   if (!from || !to) {
     return NextResponse.json([], { status: 200 })
@@ -45,11 +46,24 @@ export async function GET(req: NextRequest) {
     SELECT config_name, market, device, ads_query, report_date, report_hour,
            revenue, amount_eur, clicks, searches, bidded_searches, bidded_results
     FROM report_data
-    WHERE breakdown = ${breakdown}
+    WHERE breakdown = ${dbBreakdown}
       AND report_date >= ${from}
       AND report_date <= ${to}
-    ORDER BY report_date DESC
+    ORDER BY report_date ASC
   `
+
+  if (breakdown === 'trend') {
+    const agg: Record<string, { report_date: string; revenue: number; clicks: number; searches: number; bidded_searches: number }> = {}
+    for (const row of data as Record<string, unknown>[]) {
+      const dateStr = String(row.report_date).split('T')[0]
+      if (!agg[dateStr]) agg[dateStr] = { report_date: dateStr, revenue: 0, clicks: 0, searches: 0, bidded_searches: 0 }
+      agg[dateStr].revenue += Number(row.revenue ?? 0)
+      agg[dateStr].clicks += Number(row.clicks ?? 0)
+      agg[dateStr].searches += Number(row.searches ?? 0)
+      agg[dateStr].bidded_searches += Number(row.bidded_searches ?? 0)
+    }
+    return NextResponse.json(Object.values(agg).sort((a, b) => a.report_date.localeCompare(b.report_date)))
+  }
 
   if (breakdown === 'daily') {
     // Aggregate by (config, market, device, query) across all placements and dates
