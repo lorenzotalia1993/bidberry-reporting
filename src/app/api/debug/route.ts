@@ -21,8 +21,8 @@ export async function GET() {
     // Sample hourly rows: check if report_hour is null
     const hourlyNullCheck = await sql`
       SELECT
-        COUNT(*) FILTER (WHERE report_hour IS NULL) as null_hours,
-        COUNT(*) FILTER (WHERE report_hour IS NOT NULL) as non_null_hours
+        COUNT(CASE WHEN report_hour IS NULL THEN 1 END) as null_hours,
+        COUNT(CASE WHEN report_hour IS NOT NULL THEN 1 END) as non_null_hours
       FROM report_data
       WHERE breakdown = 'hourly'
     `
