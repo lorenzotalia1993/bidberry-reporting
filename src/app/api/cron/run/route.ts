@@ -55,10 +55,24 @@ export async function GET(req: NextRequest) {
 
         if (toInsert.length > 0) {
           const dates = [...new Set(toInsert.map(r => r.report_date).filter(Boolean))]
-          if (dates.length > 0) {
-            await sql`DELETE FROM report_data WHERE breakdown = ${breakdown} AND report_date = ANY(${dates})`
+          for (const date of dates) {
+            await sql`DELETE FROM report_data WHERE breakdown = ${breakdown} AND report_date = ${date}`
           }
-          await sql`INSERT INTO report_data ${sql(toInsert)}`
+          for (const row of toInsert) {
+            await sql`
+              INSERT INTO report_data (
+                job_id, breakdown, config_name, report_date, report_hour,
+                revenue, amount_eur, clicks, searches, bidded_searches, bidded_results,
+                ads_query, market, device, placement, raw
+              ) VALUES (
+                ${row.job_id}, ${row.breakdown}, ${row.config_name}, ${row.report_date}, ${row.report_hour},
+                ${row.revenue}, ${row.amount_eur}, ${row.clicks}, ${row.searches},
+                ${row.bidded_searches}, ${row.bidded_results},
+                ${row.ads_query}, ${row.market}, ${row.device}, ${row.placement},
+                ${JSON.stringify(row.raw)}
+              )
+            `
+          }
         }
 
         await sql`UPDATE report_jobs SET status = 'SUCCESS', records = ${rows.length}, updated_at = NOW() WHERE job_id = ${job.job_id}`
