@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
           job_id: job.job_id, breakdown,
           config_name: row.config_name || null,
           report_date: row.date || null,
-          report_hour: breakdown === 'hourly' ? (parseInt(row.hour || '0', 10) || null) : null,
+          report_hour: breakdown === 'hourly' ? (row.hour != null && row.hour !== '' ? parseInt(row.hour, 10) : null) : null,
           revenue: parseFloat(row.amount_usd || '0') || 0,
           amount_eur: parseFloat(row.amount_eur || '0') || 0,
           clicks: parseInt(row.bidded_clicks || '0', 10) || 0,
@@ -74,8 +74,8 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // Step 2: request new hourly report if not already done today
-  const date = todayStr()
+  // Step 2: request new hourly report for the given date (default: today)
+  const date = req.nextUrl.searchParams.get('date') ?? todayStr()
   const existing = await sql`
     SELECT job_id FROM report_jobs
     WHERE breakdown = 'hourly' AND date_from = ${date} AND date_to = ${date}

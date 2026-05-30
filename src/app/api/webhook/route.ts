@@ -42,7 +42,7 @@ export async function processJob(jobId: number) {
     breakdown,
     config_name: row.config_name || null,
     report_date: row.date || null,
-    report_hour: breakdown === 'hourly' ? (parseInt(row.hour || '0', 10) || null) : null,
+    report_hour: breakdown === 'hourly' ? (row.hour != null && row.hour !== '' ? parseInt(row.hour, 10) : null) : null,
     revenue: parseFloat(row.amount_usd || '0') || 0,
     amount_eur: parseFloat(row.amount_eur || '0') || 0,
     clicks: parseInt(row.bidded_clicks || '0', 10) || 0,
