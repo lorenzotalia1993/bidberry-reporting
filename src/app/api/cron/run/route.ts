@@ -11,10 +11,14 @@ function todayStr() {
 export async function GET(req: NextRequest) {
   const auth = req.headers.get('authorization') ?? ''
   const secret = req.nextUrl.searchParams.get('secret')
-  const validBearer = auth === `Bearer ${process.env.CRON_SECRET}`
-  const validQuery = secret === process.env.CRON_SECRET
+  const envSecret = (process.env.CRON_SECRET ?? '').trim()
+  const validBearer = auth === `Bearer ${envSecret}`
+  const validQuery = (secret ?? '').trim() === envSecret
   if (!validBearer && !validQuery) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({
+      error: 'Unauthorized',
+      debug: { envSecretLength: envSecret.length, querySecretLength: (secret ?? '').length }
+    }, { status: 401 })
   }
 
   const log: string[] = []
