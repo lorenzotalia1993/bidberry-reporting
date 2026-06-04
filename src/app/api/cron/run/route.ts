@@ -78,33 +78,31 @@ export async function GET(req: NextRequest) {
   // Step 2: request new hourly report for the given date (default: today)
   const date = req.nextUrl.searchParams.get('date') ?? todayStr()
   const existing = await sql`
-    SELECT job_id FROM report_jobs
+    SELECT job_id, status FROM report_jobs
     WHERE breakdown = 'hourly' AND date_from = ${date} AND date_to = ${date}
+    ORDER BY created_at DESC
     LIMIT 1
   `
 
   let newJobId: number | null = null
-  if (existing.length === 0) {
+  const hasActiveJob = existing.some((j: { status: string }) => j.status === 'QUEUED' || j.status === 'RUNNING')
+
+  if (existing.length === 0 || (!hasActiveJob)) {
     try {
       const webhookUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/webhook?jobId={JOBID}&jobStatus={JOBSTATUS}&secret=${process.env.CRON_SECRET}`
       const { jobId } = await requestReport(date, date, 'hourly', webhookUrl)
-      await sql`INSERT INTO report_jobs (job_id, status, breakdown, date_from, date_to) VALUES (${jobId}, 'QUEUED', 'hourly', ${date}, ${date})`
+      await sql`
+        INSERT INTO report_jobs (job_id, status, breakdown, date_from, date_to)
+        VALUES (${jobId}, 'QUEUED', 'hourly', ${date}, ${date})
+        ON CONFLICT (job_id) DO UPDATE SET status = 'QUEUED', updated_at = NOW()
+      `
       newJobId = jobId
-      log.push(`requested new hourly job ${jobId} for ${date}`)
+      log.push(`${existing.length === 0 ? 'requested' : 're-requested'} hourly job ${jobId} for ${date}`)
     } catch (e) {
       log.push(`error requesting report: ${String(e)}`)
     }
   } else {
-    // Re-request to get updated hourly data (overwrite existing)
-    try {
-      const webhookUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/webhook?jobId={JOBID}&jobStatus={JOBSTATUS}&secret=${process.env.CRON_SECRET}`
-      const { jobId } = await requestReport(date, date, 'hourly', webhookUrl)
-      await sql`INSERT INTO report_jobs (job_id, status, breakdown, date_from, date_to) VALUES (${jobId}, 'QUEUED', 'hourly', ${date}, ${date})`
-      newJobId = jobId
-      log.push(`re-requested hourly job ${jobId} for ${date} (update)`)
-    } catch (e) {
-      log.push(`error re-requesting report: ${String(e)}`)
-    }
+    log.push(`hourly job for ${date} already active (${existing[0].job_id}), skipping re-request`)
   }
 
   return NextResponse.json({ ok: true, date, newJobId, log })
