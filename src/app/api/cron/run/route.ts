@@ -85,7 +85,7 @@ export async function GET(req: NextRequest) {
   `
 
   let newJobId: number | null = null
-  const hasActiveJob = existing.some((j: { status: string }) => j.status === 'QUEUED' || j.status === 'RUNNING')
+  const hasActiveJob = existing.some((j) => (j.status as string) === 'QUEUED' || (j.status as string) === 'RUNNING')
 
   if (existing.length === 0 || (!hasActiveJob)) {
     try {
