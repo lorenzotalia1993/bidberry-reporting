@@ -20,10 +20,12 @@ export async function GET(req: NextRequest) {
 
   const log: string[] = []
 
-  // Step 1: process any pending/running jobs
+  // Step 1: process pending/running jobs created in the last 7 days only
+  // (older jobs with expired download links would clog the queue forever)
   const pendingJobs = await sql`
     SELECT job_id FROM report_jobs
     WHERE status IN ('QUEUED', 'RUNNING')
+      AND created_at >= NOW() - INTERVAL '7 days'
     ORDER BY created_at ASC
     LIMIT 20
   `
@@ -55,10 +57,7 @@ export async function GET(req: NextRequest) {
         }))
 
         if (toInsert.length > 0) {
-          const dates = [...new Set(toInsert.map(r => r.report_date).filter(Boolean))]
-          if (dates.length > 0) {
-            await sql`DELETE FROM report_data WHERE breakdown = ${breakdown} AND report_date = ANY(${dates})`
-          }
+          await sql`DELETE FROM report_data WHERE job_id = ${job.job_id}`
           await sql`INSERT INTO report_data ${sql(toInsert)}`
         }
 
@@ -67,6 +66,10 @@ export async function GET(req: NextRequest) {
       } else if (jobData.status === 'FAILED') {
         await sql`UPDATE report_jobs SET status = 'FAILED', updated_at = NOW() WHERE job_id = ${job.job_id}`
         log.push(`job ${job.job_id} failed`)
+      } else if (jobData.status === 'SUCCESS' && !jobData.downloadLink) {
+        // Link expired — mark stale so it doesn't block the queue
+        await sql`UPDATE report_jobs SET status = 'FAILED', updated_at = NOW() WHERE job_id = ${job.job_id}`
+        log.push(`job ${job.job_id} SUCCESS but link expired, marked FAILED`)
       } else {
         log.push(`job ${job.job_id} still ${jobData.status}`)
       }
