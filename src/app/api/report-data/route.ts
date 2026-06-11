@@ -31,6 +31,28 @@ function aggregate(data: Record<string, unknown>[], keyFields: string[]): AggRow
   return Object.values(agg)
 }
 
+// Safely extract YYYY-MM-DD from a postgres date value regardless of how
+// the driver serializes it (ISO string, Date object, or Date.toString() format)
+function toDateStr(d: unknown): string {
+  if (!d) return ''
+  if (d instanceof Date) {
+    const y = d.getUTCFullYear()
+    const m = String(d.getUTCMonth() + 1).padStart(2, '0')
+    const day = String(d.getUTCDate()).padStart(2, '0')
+    return `${y}-${m}-${day}`
+  }
+  const s = String(d)
+  // ISO format: "2026-06-10T00:00:00.000Z"
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10)
+  // Date.toString() format: "Wed Jun 10 2026 00:00:00 GMT+0000 ..."
+  const m = s.match(/(\w{3})\s+(\d{1,2})\s+(\d{4})/)
+  if (m) {
+    const months: Record<string, string> = { Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12' }
+    return `${m[3]}-${months[m[1]] ?? '01'}-${m[2].padStart(2, '0')}`
+  }
+  return s.split('T')[0]
+}
+
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl
   const from = searchParams.get('from')
@@ -55,7 +77,7 @@ export async function GET(req: NextRequest) {
   if (breakdown === 'trend') {
     const agg: Record<string, { report_date: string; revenue: number; clicks: number; searches: number; bidded_searches: number }> = {}
     for (const row of data as Record<string, unknown>[]) {
-      const dateStr = String(row.report_date).split('T')[0]
+      const dateStr = toDateStr(row.report_date)
       if (!agg[dateStr]) agg[dateStr] = { report_date: dateStr, revenue: 0, clicks: 0, searches: 0, bidded_searches: 0 }
       agg[dateStr].revenue += Number(row.revenue ?? 0)
       agg[dateStr].clicks += Number(row.clicks ?? 0)
@@ -76,7 +98,7 @@ export async function GET(req: NextRequest) {
   type HourlyAggRow = AggRow & { report_date: unknown; report_hour: number }
   const agg: Record<string, HourlyAggRow> = {}
   for (const row of data) {
-    const dateStr = String(row.report_date).split('T')[0]
+    const dateStr = toDateStr(row.report_date)
     const key = [dateStr, row.report_hour, row.config_name, row.market, row.device, row.ads_query].join('|__|')
     if (!agg[key]) {
       agg[key] = {
