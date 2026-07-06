@@ -8,7 +8,8 @@ import {
 
 // ── Types ──────────────────────────────────────────────────────────
 type Breakdown = 'daily' | 'hourly'
-type ActiveTab = 'daily' | 'hourly' | 'analytics'
+type ActiveTab = 'daily' | 'hourly' | 'analytics' | 'nexify'
+type NexifySubTab = 'daily' | 'hourly'
 
 interface DailyRow {
   config_name: string
@@ -34,6 +35,29 @@ interface TrendRow {
   clicks: number
   searches: number
   bidded_searches: number
+}
+
+interface NexifyDailyRow {
+  config_name: string
+  domain: string
+  market: string
+  device: string
+  ads_query: string
+  source_type: string
+  tq_score: string
+  coverage: number
+  ctr: number
+  revenue: number
+  amount_eur: number
+  clicks: number
+  searches: number
+  bidded_searches: number
+  bidded_results: number
+}
+
+interface NexifyHourlyRow extends NexifyDailyRow {
+  report_date: string
+  report_hour: number
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -259,35 +283,95 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null)
   const [filters, setFilters] = useState({ config: '', query: '', device: '', hour: '' })
   const [dailyFilters, setDailyFilters] = useState({ config: '', query: '' })
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  const [syncing, setSyncing] = useState(false)
+  const [syncLog, setSyncLog] = useState<string[]>([])
+  // Nexify state
+  const [nexifySubTab, setNexifySubTab] = useState<NexifySubTab>('daily')
+  const [nexifyDailyData, setNexifyDailyData] = useState<NexifyDailyRow[]>([])
+  const [nexifyHourlyData, setNexifyHourlyData] = useState<NexifyHourlyRow[]>([])
+  const [nexifyLoading, setNexifyLoading] = useState(false)
+  const [nexifyFilters, setNexifyFilters] = useState({ domain: '', source: '', device: '', hour: '' })
 
-  const fetchData = useCallback(async () => {
-    if (!range.from || !range.to) return
+  const fetchAll = useCallback(async (from: string, to: string, bd: Breakdown) => {
+    if (!from || !to) return
     setLoading(true)
     setError(null)
     try {
-      const params = new URLSearchParams({ from: range.from, to: range.to, breakdown })
+      const params = new URLSearchParams({ from, to, breakdown: bd })
       const res = await fetch(`/api/report-data?${params}`)
       if (!res.ok) throw new Error(await res.text())
       const json = await res.json()
-      if (breakdown === 'daily') setDailyData(json)
+      if (bd === 'daily') setDailyData(json)
       else setHourlyData(json)
+
+      // Always also refresh daily + trend
+      const [dailyRes, trendRes] = await Promise.all([
+        fetch(`/api/report-data?${new URLSearchParams({ from, to, breakdown: 'daily' })}`),
+        fetch(`/api/report-data?${new URLSearchParams({ from, to, breakdown: 'trend' })}`),
+      ])
+      if (dailyRes.ok) setDailyData(await dailyRes.json())
+      if (trendRes.ok) setTrendData(await trendRes.json())
+
+      setLastUpdated(new Date())
     } catch (e) {
       setError(String(e))
     } finally {
       setLoading(false)
     }
-  }, [range.from, range.to, breakdown])
+  }, [])
+
+  const fetchData = useCallback(() => {
+    fetchAll(range.from, range.to, breakdown)
+  }, [fetchAll, range.from, range.to, breakdown])
+
+  const fetchNexify = useCallback(async (from: string, to: string) => {
+    if (!from || !to) return
+    setNexifyLoading(true)
+    try {
+      const [dailyRes, hourlyRes] = await Promise.all([
+        fetch(`/api/report-data?${new URLSearchParams({ from, to, breakdown: 'daily', provider: 'nexify' })}`),
+        fetch(`/api/report-data?${new URLSearchParams({ from, to, breakdown: 'hourly', provider: 'nexify' })}`),
+      ])
+      if (dailyRes.ok) setNexifyDailyData(await dailyRes.json())
+      if (hourlyRes.ok) setNexifyHourlyData(await hourlyRes.json())
+    } catch {
+      // silent
+    } finally {
+      setNexifyLoading(false)
+    }
+  }, [])
 
   useEffect(() => { fetchData() }, [fetchData])
+  useEffect(() => { fetchNexify(range.from, range.to) }, [fetchNexify, range.from, range.to])
 
-  // Always fetch daily + trend data for analytics tab
+  // Auto-refresh display every 5 minutes
   useEffect(() => {
-    if (!range.from || !range.to) return
-    fetch(`/api/report-data?${new URLSearchParams({ from: range.from, to: range.to, breakdown: 'daily' })}`)
-      .then(r => r.json()).then(setDailyData).catch(() => {})
-    fetch(`/api/report-data?${new URLSearchParams({ from: range.from, to: range.to, breakdown: 'trend' })}`)
-      .then(r => r.json()).then(setTrendData).catch(() => {})
-  }, [range.from, range.to])
+    const id = setInterval(() => { fetchData() }, 5 * 60 * 1000)
+    return () => clearInterval(id)
+  }, [fetchData])
+
+  // Sync with Enki every 2 minutes: request reports + process pending jobs
+  const runSync = useCallback(async () => {
+    setSyncing(true)
+    try {
+      const res = await fetch('/api/sync')
+      const json = await res.json()
+      setSyncLog(json.log ?? [])
+      // After sync, refresh data to pick up newly processed reports
+      await fetchAll(range.from, range.to, breakdown)
+    } catch {
+      // silent
+    } finally {
+      setSyncing(false)
+    }
+  }, [fetchAll, range.from, range.to, breakdown])
+
+  useEffect(() => {
+    runSync() // run immediately on mount
+    const id = setInterval(runSync, 2 * 60 * 1000)
+    return () => clearInterval(id)
+  }, [runSync])
 
   // ── Analytics computed data ────────────────────────────────────
   const revenueByDate = useMemo(() =>
@@ -589,6 +673,35 @@ export default function Dashboard() {
           font-size: 13px; letter-spacing: 0.06em;
         }
 
+        .refresh-badge {
+          display: flex; align-items: center; gap: 6px;
+          padding: 4px 10px; background: #f0efe9; border: 1px solid #dddcd8;
+          border-radius: 3px; font-family: 'DM Mono', monospace; font-size: 11px;
+          color: #aaa; white-space: nowrap;
+        }
+        .refresh-dot {
+          width: 6px; height: 6px; border-radius: 50%; background: #22c55e; flex-shrink: 0;
+          animation: pulse 2s ease-in-out infinite;
+        }
+        .refresh-dot.syncing {
+          background: #c2800a;
+          animation: spin 0.7s linear infinite;
+          border-radius: 0;
+          clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+        }
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.3; }
+        }
+
+        .sync-log {
+          margin-top: 8px; padding: 8px 12px; background: #f0efe9;
+          border: 1px solid #e0dfd9; border-radius: 3px;
+          font-family: 'DM Mono', monospace; font-size: 10px; color: #888;
+          max-height: 80px; overflow-y: auto;
+        }
+        .sync-log-line { line-height: 1.6; }
+
         .legend { display: flex; gap: 16px; margin-bottom: 12px; flex-wrap: wrap; }
         .legend-item { display: flex; align-items: center; gap: 6px; }
         .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
@@ -619,6 +732,15 @@ export default function Dashboard() {
                 onChange={v => setRange(r => ({ ...r, to: v }))} />
             </div>
             <button className="apply-btn" onClick={fetchData}>Apply</button>
+            <div className="refresh-badge" title={syncLog.join('\n')}>
+              <span className={`refresh-dot${syncing ? ' syncing' : ''}`} />
+              {syncing ? 'syncing…' : lastUpdated
+                ? lastUpdated.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                : '—'}
+            </div>
+            <button className="apply-btn" style={{ background: '#555' }} onClick={runSync} disabled={syncing}>
+              Sync
+            </button>
           </div>
         </header>
 
@@ -635,6 +757,10 @@ export default function Dashboard() {
             className={`tab ${activeTab === 'analytics' ? 'active' : ''}`}
             onClick={() => setActiveTab('analytics')}
           >Analytics</button>
+          <button
+            className={`tab ${activeTab === 'nexify' ? 'active' : ''}`}
+            onClick={() => setActiveTab('nexify')}
+          >Nexify</button>
         </div>
 
         {error && <div className="error-msg">{error}</div>}
@@ -994,6 +1120,213 @@ export default function Dashboard() {
             )}
           </>
         )}
+        {activeTab === 'nexify' && (() => {
+          const uniqueDomains = [...new Set(nexifyDailyData.map(r => r.domain))].filter(Boolean).sort()
+          const uniqueSources = [...new Set(nexifyDailyData.map(r => r.source_type))].filter(Boolean).sort()
+          const uniqueHDomains = [...new Set(nexifyHourlyData.map(r => r.domain))].filter(Boolean).sort()
+          const uniqueHSources = [...new Set(nexifyHourlyData.map(r => r.source_type))].filter(Boolean).sort()
+          const uniqueHDevices = [...new Set(nexifyHourlyData.map(r => r.device))].filter(Boolean).sort()
+          const uniqueHHours = [...new Set(nexifyHourlyData.map(r => r.report_hour))].sort((a, b) => a - b)
+
+          const filteredNexifyDaily = nexifyDailyData.filter(r =>
+            (!nexifyFilters.domain || r.domain === nexifyFilters.domain) &&
+            (!nexifyFilters.source || r.source_type === nexifyFilters.source)
+          )
+          const filteredNexifyHourly = nexifyHourlyData.filter(r =>
+            (!nexifyFilters.domain || r.domain === nexifyFilters.domain) &&
+            (!nexifyFilters.source || r.source_type === nexifyFilters.source) &&
+            (!nexifyFilters.device || r.device === nexifyFilters.device) &&
+            (!nexifyFilters.hour || r.report_hour === Number(nexifyFilters.hour))
+          )
+
+          const nxDailyTotals = filteredNexifyDaily.reduce(
+            (acc, r) => ({
+              revenue: acc.revenue + r.revenue, amount_eur: acc.amount_eur + r.amount_eur,
+              clicks: acc.clicks + r.clicks, searches: acc.searches + r.searches,
+              bidded_searches: acc.bidded_searches + r.bidded_searches,
+              bidded_results: acc.bidded_results + r.bidded_results,
+            }),
+            { revenue: 0, amount_eur: 0, clicks: 0, searches: 0, bidded_searches: 0, bidded_results: 0 }
+          )
+          const nxHourlyTotals = filteredNexifyHourly.reduce(
+            (acc, r) => ({
+              revenue: acc.revenue + r.revenue, amount_eur: acc.amount_eur + r.amount_eur,
+              clicks: acc.clicks + r.clicks, searches: acc.searches + r.searches,
+              bidded_searches: acc.bidded_searches + r.bidded_searches,
+              bidded_results: acc.bidded_results + r.bidded_results,
+            }),
+            { revenue: 0, amount_eur: 0, clicks: 0, searches: 0, bidded_searches: 0, bidded_results: 0 }
+          )
+          const totals = nexifySubTab === 'daily' ? nxDailyTotals : nxHourlyTotals
+
+          return (
+            <>
+              {/* Sub-tabs */}
+              <div style={{ display: 'flex', gap: 0, marginTop: 20, borderBottom: '1px solid #e0dfd9' }}>
+                {(['daily', 'hourly'] as NexifySubTab[]).map(t => (
+                  <button key={t} className={`tab ${nexifySubTab === t ? 'active' : ''}`}
+                    onClick={() => setNexifySubTab(t)}
+                    style={{ fontSize: 10, padding: '8px 16px' }}>
+                    {t.charAt(0).toUpperCase() + t.slice(1)}
+                  </button>
+                ))}
+              </div>
+
+              {/* Filters */}
+              <div className="filters">
+                {(nexifySubTab === 'daily' ? uniqueDomains : uniqueHDomains).length > 0 && (
+                  <select className="filter-select" value={nexifyFilters.domain}
+                    onChange={e => setNexifyFilters(f => ({ ...f, domain: e.target.value }))}>
+                    <option value="">All Domains</option>
+                    {(nexifySubTab === 'daily' ? uniqueDomains : uniqueHDomains).map(v => <option key={v} value={v}>{v}</option>)}
+                  </select>
+                )}
+                {(nexifySubTab === 'daily' ? uniqueSources : uniqueHSources).length > 0 && (
+                  <select className="filter-select" value={nexifyFilters.source}
+                    onChange={e => setNexifyFilters(f => ({ ...f, source: e.target.value }))}>
+                    <option value="">All Sources</option>
+                    {(nexifySubTab === 'daily' ? uniqueSources : uniqueHSources).map(v => <option key={v} value={v}>{v}</option>)}
+                  </select>
+                )}
+                {nexifySubTab === 'hourly' && uniqueHDevices.length > 0 && (
+                  <select className="filter-select" value={nexifyFilters.device}
+                    onChange={e => setNexifyFilters(f => ({ ...f, device: e.target.value }))}>
+                    <option value="">All Devices</option>
+                    {uniqueHDevices.map(v => <option key={v} value={v}>{v}</option>)}
+                  </select>
+                )}
+                {nexifySubTab === 'hourly' && uniqueHHours.length > 0 && (
+                  <select className="filter-select" value={nexifyFilters.hour}
+                    onChange={e => setNexifyFilters(f => ({ ...f, hour: e.target.value }))}>
+                    <option value="">All Hours</option>
+                    {uniqueHHours.map(h => <option key={h} value={h}>{String(h).padStart(2,'0')}:00</option>)}
+                  </select>
+                )}
+                {(nexifyFilters.domain || nexifyFilters.source || nexifyFilters.device || nexifyFilters.hour) && (
+                  <button className="filter-clear" onClick={() => setNexifyFilters({ domain: '', source: '', device: '', hour: '' })}>Clear</button>
+                )}
+              </div>
+
+              {/* Summary */}
+              <div className="summary">
+                {[
+                  { label: 'Revenue (USD)', value: `$${fmt(totals.revenue)}`, amber: true },
+                  { label: 'Revenue (EUR)', value: `€${fmt(totals.amount_eur)}` },
+                  { label: 'Clicks', value: fmtInt(totals.clicks) },
+                  { label: 'Searches', value: fmtInt(totals.searches) },
+                  { label: 'RPC', value: totals.clicks > 0 ? `$${fmt(totals.revenue / totals.clicks)}` : '—' },
+                  { label: 'CTR', value: totals.bidded_searches > 0 ? `${fmt(totals.clicks / totals.bidded_searches * 100)}%` : '—' },
+                ].map(({ label, value, amber }) => (
+                  <div key={label} className="summary-cell">
+                    <span className="summary-label">{label}</span>
+                    <span className={`summary-value${amber ? ' amber' : ''}`}>{value}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Daily table */}
+              {nexifySubTab === 'daily' && (
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Domain</th>
+                        <th>Market</th>
+                        <th>Device</th>
+                        <th>Channel</th>
+                        <th>Source</th>
+                        <th>TQ</th>
+                        <th>Rev (USD)</th>
+                        <th>Rev (EUR)</th>
+                        <th>Clicks</th>
+                        <th>Searches</th>
+                        <th>RPC</th>
+                        <th>CTR</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {nexifyLoading ? (
+                        <tr><td colSpan={12}><div className="state-row"><span className="spinner" />Loading…</div></td></tr>
+                      ) : filteredNexifyDaily.length === 0 ? (
+                        <tr><td colSpan={12}><div className="state-row">No data for this period</div></td></tr>
+                      ) : filteredNexifyDaily.map((row, i) => (
+                        <tr key={i}>
+                          <td><span className="config-tag">{row.domain}</span></td>
+                          <td style={{textAlign:'left', color:'#666', fontSize:12}}>{row.market}</td>
+                          <td style={{textAlign:'left', color:'#666', fontSize:12}}>{row.device}</td>
+                          <td style={{textAlign:'left', fontFamily:"'DM Mono',monospace", fontSize:12, color:'#aaa', maxWidth:180, overflow:'hidden', textOverflow:'ellipsis'}}>{row.ads_query}</td>
+                          <td style={{textAlign:'left', color:'#666', fontSize:12}}>{row.source_type}</td>
+                          <td style={{textAlign:'right', fontFamily:"'DM Mono',monospace", fontSize:12, color:'#888'}}>{row.tq_score || '—'}</td>
+                          <td className="revenue">${fmt(row.revenue)}</td>
+                          <td style={{textAlign:'right', fontFamily:"'DM Mono',monospace", fontSize:13, color:'#888'}}>€{fmt(row.amount_eur)}</td>
+                          <td className="clicks">{fmtInt(row.clicks)}</td>
+                          <td>{fmtInt(row.searches)}</td>
+                          <td style={{textAlign:'right', fontFamily:"'DM Mono',monospace", fontSize:13, color:'#c2800a'}}>
+                            {row.clicks > 0 ? `$${fmt(row.revenue / row.clicks)}` : '—'}
+                          </td>
+                          <td style={{textAlign:'right', fontFamily:"'DM Mono',monospace", fontSize:13, color:'#555'}}>
+                            {row.bidded_searches > 0 ? `${fmt(row.clicks / row.bidded_searches * 100)}%` : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Hourly table */}
+              {nexifySubTab === 'hourly' && (
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Hour</th>
+                        <th>Domain</th>
+                        <th>Market</th>
+                        <th>Device</th>
+                        <th>Channel</th>
+                        <th>Source</th>
+                        <th>Rev (USD)</th>
+                        <th>Clicks</th>
+                        <th>Searches</th>
+                        <th>RPC</th>
+                        <th>CTR</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {nexifyLoading ? (
+                        <tr><td colSpan={12}><div className="state-row"><span className="spinner" />Loading…</div></td></tr>
+                      ) : filteredNexifyHourly.length === 0 ? (
+                        <tr><td colSpan={12}><div className="state-row">No data for this period</div></td></tr>
+                      ) : filteredNexifyHourly.map((row, i) => (
+                        <tr key={i}>
+                          <td style={{ fontFamily:"'DM Mono',monospace", textAlign:'left', color:'#666' }}>{String(row.report_date).split('T')[0]}</td>
+                          <td><span className="hour-badge">{String(row.report_hour).padStart(2,'0')}</span></td>
+                          <td style={{ textAlign:'left' }}><span className="config-tag">{row.domain}</span></td>
+                          <td style={{textAlign:'left', color:'#666', fontSize:12}}>{row.market}</td>
+                          <td style={{textAlign:'left', color:'#666', fontSize:12}}>{row.device}</td>
+                          <td style={{textAlign:'left', fontFamily:"'DM Mono',monospace", fontSize:12, color:'#aaa', maxWidth:160, overflow:'hidden', textOverflow:'ellipsis'}}>{row.ads_query}</td>
+                          <td style={{textAlign:'left', color:'#666', fontSize:12}}>{row.source_type}</td>
+                          <td className="revenue">${fmt(row.revenue)}</td>
+                          <td className="clicks">{fmtInt(row.clicks)}</td>
+                          <td>{fmtInt(row.searches)}</td>
+                          <td style={{textAlign:'right', fontFamily:"'DM Mono',monospace", fontSize:13, color:'#c2800a'}}>
+                            {row.clicks > 0 ? `$${fmt(row.revenue / row.clicks)}` : '—'}
+                          </td>
+                          <td style={{textAlign:'right', fontFamily:"'DM Mono',monospace", fontSize:13, color:'#555'}}>
+                            {row.bidded_searches > 0 ? `${fmt(row.clicks / row.bidded_searches * 100)}%` : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )
+        })()}
+
       </div>
     </>
   )
