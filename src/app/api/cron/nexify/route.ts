@@ -73,7 +73,8 @@ export async function GET(req: NextRequest) {
         bidded_searches: row.bidded_searches ?? 0,
         bidded_results: row.bidded_results ?? 0,
         placement: null,
-        raw: row,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        raw: JSON.parse(JSON.stringify(row)) as any,
       }))
 
       // Delete previous data for this date+breakdown+provider before re-inserting
