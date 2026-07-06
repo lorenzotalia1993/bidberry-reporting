@@ -32,7 +32,8 @@ export async function GET(req: NextRequest) {
     const [dbRow] = await sql`SELECT current_database() AS db, current_schema() AS schema`
     log.push(`connected to db=${dbRow.db} schema=${dbRow.schema}`)
     const tables = await sql`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name`
-    log.push(`tables: ${tables.map((t: { table_name: string }) => t.table_name).join(', ')}`)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    log.push(`tables: ${tables.map((t: any) => t.table_name).join(', ')}`)
   } catch (e) {
     log.push(`diagnostic error: ${String(e)}`)
   }
