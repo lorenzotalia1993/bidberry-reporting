@@ -27,6 +27,16 @@ export async function GET(req: NextRequest) {
 
   const log: string[] = []
 
+  // Temporary diagnostic: show which DB the app is connected to
+  try {
+    const [dbRow] = await sql`SELECT current_database() AS db, current_schema() AS schema`
+    log.push(`connected to db=${dbRow.db} schema=${dbRow.schema}`)
+    const tables = await sql`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name`
+    log.push(`tables: ${tables.map((t: { table_name: string }) => t.table_name).join(', ')}`)
+  } catch (e) {
+    log.push(`diagnostic error: ${String(e)}`)
+  }
+
   async function runBreakdown(type: 'daily' | 'hourly') {
     try {
       // Check if already fetched for this date+breakdown
