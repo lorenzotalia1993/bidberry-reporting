@@ -28,20 +28,20 @@ export async function GET(req: NextRequest) {
   const log: string[] = []
 
   async function runBreakdown(type: 'daily' | 'hourly') {
-    // Check if already fetched today for this date+breakdown
-    const [existing] = await sql`
-      SELECT id FROM nexify_fetches
-      WHERE date = ${date} AND breakdown = ${type}
-    `
-
-    // For daily: only re-fetch if no record at all (daily data is final once available)
-    // For hourly: always re-fetch (intraday data keeps updating)
-    if (type === 'daily' && existing) {
-      log.push(`nexify daily ${date} already fetched (${existing.id}), skipping`)
-      return
-    }
-
     try {
+      // Check if already fetched for this date+breakdown
+      const [existing] = await sql`
+        SELECT id FROM nexify_fetches
+        WHERE date = ${date} AND breakdown = ${type}
+      `
+
+      // For daily: only re-fetch if no record at all (daily data is final once available)
+      // For hourly: always re-fetch (intraday data keeps updating)
+      if (type === 'daily' && existing) {
+        log.push(`nexify daily ${date} already fetched (${existing.id}), skipping`)
+        return
+      }
+
       const rows = type === 'daily'
         ? await fetchNexifyDaily(date)
         : await fetchNexifyHourly(date)
