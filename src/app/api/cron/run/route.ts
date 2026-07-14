@@ -7,6 +7,12 @@ function todayStr() {
   return new Date().toISOString().split('T')[0]
 }
 
+function yesterdayStr() {
+  const d = new Date()
+  d.setDate(d.getDate() - 1)
+  return d.toISOString().split('T')[0]
+}
+
 // Single endpoint: process pending jobs first, then request a new hourly report
 export async function GET(req: NextRequest) {
   const auth = req.headers.get('authorization') ?? ''
@@ -78,19 +84,28 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // Step 2: request new hourly report for the given date (default: today)
-  const date = req.nextUrl.searchParams.get('date') ?? todayStr()
-  const existing = await sql`
-    SELECT job_id, status FROM report_jobs
+  // Step 2: request hourly report for the given date (default: today)
+  // Supports date=yesterday as a keyword so cronjob.org can use a static URL
+  const rawDate = req.nextUrl.searchParams.get('date') ?? 'today'
+  const date = rawDate === 'yesterday' ? yesterdayStr() : rawDate === 'today' ? todayStr() : rawDate
+
+  const [existing] = await sql`
+    SELECT job_id, status,
+           (created_at::date > date_from::date) AS is_next_day
+    FROM report_jobs
     WHERE breakdown = 'hourly' AND date_from = ${date} AND date_to = ${date}
     ORDER BY created_at DESC
     LIMIT 1
   `
 
   let newJobId: number | null = null
-  const hasActiveJob = existing.some((j) => (j.status as string) === 'QUEUED' || (j.status as string) === 'RUNNING')
+  const status = existing?.status as string | undefined
+  const isActive = status === 'QUEUED' || status === 'RUNNING'
+  // A SUCCESS job is "complete" only if it was created the day after the report date
+  // (meaning it captured the full day). Same-day SUCCESS = intraday snapshot.
+  const isCompleteSuccess = status === 'SUCCESS' && existing?.is_next_day
 
-  if (existing.length === 0 || (!hasActiveJob)) {
+  if (!existing || (!isActive && !isCompleteSuccess)) {
     try {
       const webhookUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/webhook?jobId={JOBID}&jobStatus={JOBSTATUS}&secret=${process.env.CRON_SECRET}`
       const { jobId } = await requestReport(date, date, 'hourly', webhookUrl)
@@ -100,12 +115,41 @@ export async function GET(req: NextRequest) {
         ON CONFLICT (job_id) DO UPDATE SET status = 'QUEUED', updated_at = NOW()
       `
       newJobId = jobId
-      log.push(`${existing.length === 0 ? 'requested' : 're-requested'} hourly job ${jobId} for ${date}`)
+      const reason = !existing ? 'no job' : `prev job ${existing.job_id} was ${status}${status === 'SUCCESS' ? ' (intraday)' : ''}`
+      log.push(`requested hourly job ${jobId} for ${date} (${reason})`)
     } catch (e) {
       log.push(`error requesting report: ${String(e)}`)
     }
+  } else if (isActive) {
+    log.push(`hourly ${date} already active (${existing.job_id}), skipping`)
   } else {
-    log.push(`hourly job for ${date} already active (${existing[0].job_id}), skipping re-request`)
+    log.push(`hourly ${date} already complete (${existing.job_id}, ${existing.is_next_day ? 'full day' : 'same day'}), skipping`)
+  }
+
+  // Step 3: request daily report for yesterday (data is final once the day ends)
+  const yesterday = yesterdayStr()
+  const [existingDaily] = await sql`
+    SELECT job_id, status FROM report_jobs
+    WHERE breakdown = 'daily' AND date_from = ${yesterday} AND date_to = ${yesterday}
+    ORDER BY created_at DESC
+    LIMIT 1
+  `
+  const dailyStatus = existingDaily?.status as string | undefined
+  if (!existingDaily || (dailyStatus !== 'QUEUED' && dailyStatus !== 'RUNNING' && dailyStatus !== 'SUCCESS')) {
+    try {
+      const webhookUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/webhook?jobId={JOBID}&jobStatus={JOBSTATUS}&secret=${process.env.CRON_SECRET}`
+      const { jobId: dailyJobId } = await requestReport(yesterday, yesterday, 'daily', webhookUrl)
+      await sql`
+        INSERT INTO report_jobs (job_id, status, breakdown, date_from, date_to)
+        VALUES (${dailyJobId}, 'QUEUED', 'daily', ${yesterday}, ${yesterday})
+        ON CONFLICT (job_id) DO UPDATE SET status = 'QUEUED', updated_at = NOW()
+      `
+      log.push(`requested daily job ${dailyJobId} for ${yesterday}`)
+    } catch (e) {
+      log.push(`error requesting daily report: ${String(e)}`)
+    }
+  } else {
+    log.push(`daily ${yesterday} already ${dailyStatus} (${existingDaily.job_id}), skipping`)
   }
 
   return NextResponse.json({ ok: true, date, newJobId, log })

@@ -283,6 +283,7 @@ export default function Dashboard() {
   const [syncLog, setSyncLog] = useState<string[]>([])
   const [nexifyDailyData, setNexifyDailyData] = useState<NexifyDailyRow[]>([])
   const [nexifyHourlyData, setNexifyHourlyData] = useState<NexifyHourlyRow[]>([])
+  const [nexifyTrendData, setNexifyTrendData] = useState<TrendRow[]>([])
   const [nexifyLoading, setNexifyLoading] = useState(false)
   const [nexifyFilters, setNexifyFilters] = useState({ domain: '', source: '', device: '', hour: '' })
 
@@ -315,12 +316,14 @@ export default function Dashboard() {
     if (!from || !to) return
     setNexifyLoading(true)
     try {
-      const [dailyRes, hourlyRes] = await Promise.all([
+      const [dailyRes, hourlyRes, trendRes] = await Promise.all([
         fetch(`/api/report-data?${new URLSearchParams({ from, to, breakdown: 'daily', provider: 'nexify' })}`),
         fetch(`/api/report-data?${new URLSearchParams({ from, to, breakdown: 'hourly', provider: 'nexify' })}`),
+        fetch(`/api/report-data?${new URLSearchParams({ from, to, breakdown: 'trend', provider: 'nexify' })}`),
       ])
       if (dailyRes.ok) setNexifyDailyData(await dailyRes.json())
       if (hourlyRes.ok) setNexifyHourlyData(await hourlyRes.json())
+      if (trendRes.ok) setNexifyTrendData(await trendRes.json())
     } catch {
       // silent
     } finally {
@@ -404,6 +407,47 @@ export default function Dashboard() {
 
   const pushQueries = useMemo(() => queryRPCWithColors.filter(q => q.color === '#22c55e').slice(0, 5), [queryRPCWithColors])
   const stopQueries = useMemo(() => queryRPCWithColors.filter(q => q.color === '#ef4444').slice(-5).reverse(), [queryRPCWithColors])
+
+  // ── Nexify analytics computed ──────────────────────────────────
+  const nexifyRevenueByDate = useMemo(() =>
+    nexifyTrendData.map(r => ({ date: r.report_date.slice(5), revenue: r.revenue }))
+  , [nexifyTrendData])
+
+  const nexifyTrafficByDate = useMemo(() =>
+    nexifyTrendData.map(r => ({ date: r.report_date.slice(5), clicks: r.clicks, searches: r.searches }))
+  , [nexifyTrendData])
+
+  const nexifyChannelRPCData = useMemo(() => {
+    const grouped: Record<string, { revenue: number; clicks: number }> = {}
+    nexifyDailyData.forEach(r => {
+      if (!r.ads_query) return
+      if (!grouped[r.ads_query]) grouped[r.ads_query] = { revenue: 0, clicks: 0 }
+      grouped[r.ads_query].revenue += r.revenue
+      grouped[r.ads_query].clicks += r.clicks
+    })
+    return Object.entries(grouped)
+      .filter(([, v]) => v.clicks >= 3)
+      .map(([query, v]) => ({
+        query,
+        queryShort: query.length > 28 ? query.slice(0, 26) + '…' : query,
+        rpc: v.clicks > 0 ? v.revenue / v.clicks : 0,
+        revenue: v.revenue,
+        clicks: v.clicks,
+      }))
+      .sort((a, b) => b.rpc - a.rpc)
+  }, [nexifyDailyData])
+
+  const nexifyChannelRPCWithColors = useMemo(() => {
+    if (!nexifyChannelRPCData.length) return []
+    const n = nexifyChannelRPCData.length
+    return nexifyChannelRPCData.map((q, i) => ({
+      ...q,
+      color: i < Math.ceil(n * 0.25) ? '#22c55e' : i >= Math.floor(n * 0.75) ? '#ef4444' : '#3b82f6',
+    }))
+  }, [nexifyChannelRPCData])
+
+  const nexifyPushChannels = useMemo(() => nexifyChannelRPCWithColors.filter(q => q.color === '#22c55e').slice(0, 5), [nexifyChannelRPCWithColors])
+  const nexifyStopChannels = useMemo(() => nexifyChannelRPCWithColors.filter(q => q.color === '#ef4444').slice(-5).reverse(), [nexifyChannelRPCWithColors])
 
   // ── ENKI derived ──────────────────────────────────────────────
   const uniqueDailyConfigs = [...new Set(dailyData.map(r => r.config_name))].filter(Boolean).sort()
@@ -684,7 +728,7 @@ export default function Dashboard() {
             </button>
             <button
               className={`sidebar-btn ${activeProvider === 'nexify' ? 'active' : ''}`}
-              onClick={() => { setActiveProvider('nexify'); if (activeView === 'analytics') setActiveView('daily') }}
+              onClick={() => setActiveProvider('nexify')}
             >
               <span className="provider-dot" style={{ background: '#3b82f6' }} />
               Nexify
@@ -703,14 +747,12 @@ export default function Dashboard() {
             >
               Hourly
             </button>
-            {activeProvider === 'enki' && (
-              <button
-                className={`sidebar-btn ${activeView === 'analytics' ? 'active' : ''}`}
-                onClick={() => setActiveView('analytics')}
-              >
-                Analytics
-              </button>
-            )}
+            <button
+              className={`sidebar-btn ${activeView === 'analytics' ? 'active' : ''}`}
+              onClick={() => setActiveView('analytics')}
+            >
+              Analytics
+            </button>
           </nav>
 
           <div className="sidebar-footer">
@@ -744,9 +786,6 @@ export default function Dashboard() {
                 onChange={v => setRange(r => ({ ...r, to: v }))} />
             </div>
             <button className="apply-btn" onClick={fetchData}>Apply</button>
-            <button className="apply-btn" style={{ background: '#555' }} onClick={runSync} disabled={syncing}>
-              Sync
-            </button>
           </div>
 
           {error && <div className="error-msg">{error}</div>}
@@ -1151,6 +1190,110 @@ export default function Dashboard() {
                   </tbody>
                 </table>
               </div>
+            </>
+          )}
+
+          {/* ────────────────────────── Nexify Analytics ─── */}
+          {activeProvider === 'nexify' && activeView === 'analytics' && (
+            <>
+              {nexifyTrendData.length === 0 && nexifyChannelRPCData.length === 0 ? (
+                <div className="analytics-empty">No data for this period</div>
+              ) : (
+                <>
+                  <div className="analytics-grid">
+                    <div className="chart-card">
+                      <div className="chart-title">Revenue Over Time <span style={{color:'#aaa',fontWeight:400,textTransform:'none',letterSpacing:0}}>(USD)</span></div>
+                      <ResponsiveContainer width="100%" height={200}>
+                        <LineChart data={nexifyRevenueByDate} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#f0efe9" />
+                          <XAxis dataKey="date" tick={{ fontFamily: "'DM Mono',monospace", fontSize: 10, fill: '#aaa' }} tickLine={false} axisLine={false} />
+                          <YAxis tick={{ fontFamily: "'DM Mono',monospace", fontSize: 10, fill: '#aaa' }} tickLine={false} axisLine={false} tickFormatter={v => `$${v.toFixed(0)}`} width={48} />
+                          <Tooltip content={<ChartTooltip valueFormatter={(v) => `$${fmt(v)}`} />} />
+                          <Line type="monotone" dataKey="revenue" name="Revenue" stroke="#3b82f6" strokeWidth={2} dot={false} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                    <div className="chart-card">
+                      <div className="chart-title">Traffic Over Time</div>
+                      <div className="legend">
+                        <div className="legend-item"><div className="legend-dot" style={{background:'#1a1a1a'}} /><span className="legend-label">Clicks</span></div>
+                        <div className="legend-item"><div className="legend-dot" style={{background:'#c8c7c0'}} /><span className="legend-label">Searches</span></div>
+                      </div>
+                      <ResponsiveContainer width="100%" height={200}>
+                        <AreaChart data={nexifyTrafficByDate} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#f0efe9" />
+                          <XAxis dataKey="date" tick={{ fontFamily: "'DM Mono',monospace", fontSize: 10, fill: '#aaa' }} tickLine={false} axisLine={false} />
+                          <YAxis tick={{ fontFamily: "'DM Mono',monospace", fontSize: 10, fill: '#aaa' }} tickLine={false} axisLine={false} tickFormatter={v => fmtInt(v)} width={48} />
+                          <Tooltip content={<ChartTooltip valueFormatter={(v) => fmtInt(v)} />} />
+                          <Area type="monotone" dataKey="searches" name="Searches" stroke="#e0dfd9" fill="#f5f4f0" strokeWidth={1.5} />
+                          <Area type="monotone" dataKey="clicks" name="Clicks" stroke="#1a1a1a" fill="#e8e7e2" strokeWidth={2} />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                  {nexifyChannelRPCWithColors.length > 0 && (
+                    <div className="chart-card full" style={{ marginTop: 16 }}>
+                      <div className="chart-title">Channel RPC Ranking — <span>top {Math.min(nexifyChannelRPCWithColors.length, 20)} channels by revenue per click</span></div>
+                      <div className="rpc-legend">
+                        <div className="rpc-legend-item"><div className="rpc-legend-swatch" style={{background:'#22c55e'}} />Push (top 25%)</div>
+                        <div className="rpc-legend-item"><div className="rpc-legend-swatch" style={{background:'#3b82f6'}} />Monitor (mid 50%)</div>
+                        <div className="rpc-legend-item"><div className="rpc-legend-swatch" style={{background:'#ef4444'}} />Stop (bottom 25%)</div>
+                      </div>
+                      <ResponsiveContainer width="100%" height={Math.max(180, Math.min(nexifyChannelRPCWithColors.length, 20) * 28)}>
+                        <BarChart layout="vertical" data={nexifyChannelRPCWithColors.slice(0, 20)} margin={{ top: 0, right: 48, bottom: 0, left: 8 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#f5f4f0" horizontal={false} />
+                          <XAxis type="number" tick={{ fontFamily: "'DM Mono',monospace", fontSize: 10, fill: '#aaa' }} tickLine={false} axisLine={false} tickFormatter={v => `$${v.toFixed(3)}`} />
+                          <YAxis type="category" dataKey="queryShort" width={160} tick={{ fontFamily: "'DM Mono',monospace", fontSize: 10, fill: '#666' }} tickLine={false} axisLine={false} />
+                          <Tooltip content={({ active, payload }) => {
+                            if (!active || !payload?.length) return null
+                            const d = payload[0].payload
+                            return (
+                              <div style={{ background: '#fff', border: '1px solid #dddcd8', borderRadius: 4, padding: '8px 12px', fontFamily: "'DM Mono',monospace", fontSize: 12, boxShadow: '0 4px 16px rgba(0,0,0,0.07)', maxWidth: 260 }}>
+                                <div style={{ color: '#555', fontSize: 11, marginBottom: 6, wordBreak: 'break-all' }}>{d.query}</div>
+                                <div style={{ color: '#3b82f6' }}>RPC: ${fmt(d.rpc)}</div>
+                                <div style={{ color: '#888', fontSize: 11 }}>Revenue: ${fmt(d.revenue)} · Clicks: {fmtInt(d.clicks)}</div>
+                              </div>
+                            )
+                          }} />
+                          <Bar dataKey="rpc" name="RPC" radius={[0, 2, 2, 0]}>
+                            {nexifyChannelRPCWithColors.slice(0, 20).map((entry, i) => (
+                              <Cell key={i} fill={entry.color} fillOpacity={0.85} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                  {(nexifyPushChannels.length > 0 || nexifyStopChannels.length > 0) && (
+                    <div className="push-stop-grid">
+                      <div className="signal-card">
+                        <div className="signal-header push"><div className="signal-dot" style={{ background: '#22c55e' }} />Channels to Push<span style={{ fontWeight: 400, opacity: 0.7, marginLeft: 4 }}>— high RPC, scale up</span></div>
+                        {nexifyPushChannels.length === 0 ? <div style={{ padding: '16px', color: '#bbb', fontSize: 12 }}>Not enough data</div>
+                          : nexifyPushChannels.map((q, i) => (
+                            <div key={i} className="signal-row">
+                              <span className="signal-rank">#{i + 1}</span>
+                              <span className="signal-query">{q.query}</span>
+                              <span className="signal-rpc" style={{ color: '#16a34a' }}>${fmt(q.rpc)}</span>
+                              <span className="signal-meta">{fmtInt(q.clicks)} clk</span>
+                            </div>
+                          ))}
+                      </div>
+                      <div className="signal-card">
+                        <div className="signal-header stop"><div className="signal-dot" style={{ background: '#ef4444' }} />Channels to Stop<span style={{ fontWeight: 400, opacity: 0.7, marginLeft: 4 }}>— low RPC, cut spend</span></div>
+                        {nexifyStopChannels.length === 0 ? <div style={{ padding: '16px', color: '#bbb', fontSize: 12 }}>Not enough data</div>
+                          : nexifyStopChannels.map((q, i) => (
+                            <div key={i} className="signal-row">
+                              <span className="signal-rank">#{i + 1}</span>
+                              <span className="signal-query">{q.query}</span>
+                              <span className="signal-rpc" style={{ color: '#dc2626' }}>${fmt(q.rpc)}</span>
+                              <span className="signal-meta">{fmtInt(q.clicks)} clk</span>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
             </>
           )}
 
