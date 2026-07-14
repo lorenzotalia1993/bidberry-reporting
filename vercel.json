@@ -5,7 +5,7 @@
       "schedule": "0 10 * * *"
     },
     {
-      "path": "/api/cron/nexify?breakdown=both",
+      "path": "/api/cron/nexify?breakdown=daily&date=yesterday",
       "schedule": "0 10 * * *"
     }
   ]
