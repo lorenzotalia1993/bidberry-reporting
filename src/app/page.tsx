@@ -345,13 +345,16 @@ export default function Dashboard() {
       const res = await fetch('/api/sync')
       const json = await res.json()
       setSyncLog(json.log ?? [])
-      await fetchAll(range.from, range.to)
+      await Promise.all([
+        fetchAll(range.from, range.to),
+        fetchNexify(range.from, range.to),
+      ])
     } catch {
       // silent
     } finally {
       setSyncing(false)
     }
-  }, [fetchAll, range.from, range.to])
+  }, [fetchAll, fetchNexify, range.from, range.to])
 
   useEffect(() => {
     runSync()
