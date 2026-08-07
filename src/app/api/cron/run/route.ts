@@ -26,23 +26,35 @@ export async function GET(req: NextRequest) {
 
   const log: string[] = []
 
-  // Step 1: process pending/running jobs created in the last 7 days only
-  // (older jobs with expired download links would clog the queue forever)
+  // Step 1: process pending/running jobs — only recent ones (max 2 hours old)
+  // to avoid polling stale jobs that waste API calls.
+  // Daily jobs older than 2h are auto-expired (data was already final).
   const pendingJobs = await sql`
-    SELECT job_id FROM report_jobs
+    SELECT job_id, breakdown, created_at FROM report_jobs
     WHERE status IN ('QUEUED', 'RUNNING')
-      AND created_at >= NOW() - INTERVAL '7 days'
+      AND created_at >= NOW() - INTERVAL '2 hours'
     ORDER BY created_at ASC
-    LIMIT 20
+    LIMIT 10
   `
+
+  // Auto-expire old stuck jobs so they don't accumulate
+  const expired = await sql`
+    UPDATE report_jobs
+    SET status = 'FAILED', updated_at = NOW()
+    WHERE status IN ('QUEUED', 'RUNNING')
+      AND created_at < NOW() - INTERVAL '2 hours'
+    RETURNING job_id
+  `
+  if (expired.length > 0) {
+    log.push(`expired ${expired.length} stale jobs older than 2h`)
+  }
 
   for (const job of pendingJobs) {
     try {
       const jobData = await getJobStatus(job.job_id)
       if (jobData.status === 'SUCCESS' && jobData.downloadLink) {
         const rows = await downloadReport(jobData.downloadLink)
-        const [jobRow] = await sql`SELECT breakdown FROM report_jobs WHERE job_id = ${job.job_id}`
-        const breakdown = jobRow?.breakdown ?? 'daily'
+        const breakdown = job.breakdown ?? 'daily'
 
         const toInsert = rows.map((row) => ({
           job_id: job.job_id, breakdown,
@@ -73,7 +85,6 @@ export async function GET(req: NextRequest) {
         await sql`UPDATE report_jobs SET status = 'FAILED', updated_at = NOW() WHERE job_id = ${job.job_id}`
         log.push(`job ${job.job_id} failed`)
       } else if (jobData.status === 'SUCCESS' && !jobData.downloadLink) {
-        // Link expired — mark stale so it doesn't block the queue
         await sql`UPDATE report_jobs SET status = 'FAILED', updated_at = NOW() WHERE job_id = ${job.job_id}`
         log.push(`job ${job.job_id} SUCCESS but link expired, marked FAILED`)
       } else {
@@ -84,8 +95,9 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // Step 2: request hourly report for the given date (default: today)
-  // Supports date=yesterday as a keyword so cronjob.org can use a static URL
+  // Step 2: request hourly report for today
+  // Hourly data changes throughout the day, so we re-request — but only if
+  // there's no QUEUED/RUNNING job already (avoid duplicate in-flight requests).
   const rawDate = req.nextUrl.searchParams.get('date') ?? 'today'
   const date = rawDate === 'yesterday' ? yesterdayStr() : rawDate === 'today' ? todayStr() : rawDate
 
@@ -101,8 +113,6 @@ export async function GET(req: NextRequest) {
   let newJobId: number | null = null
   const status = existing?.status as string | undefined
   const isActive = status === 'QUEUED' || status === 'RUNNING'
-  // A SUCCESS job is "complete" only if it was created the day after the report date
-  // (meaning it captured the full day). Same-day SUCCESS = intraday snapshot.
   const isCompleteSuccess = status === 'SUCCESS' && existing?.is_next_day
 
   if (!existing || (!isActive && !isCompleteSuccess)) {
@@ -123,10 +133,13 @@ export async function GET(req: NextRequest) {
   } else if (isActive) {
     log.push(`hourly ${date} already active (${existing.job_id}), skipping`)
   } else {
-    log.push(`hourly ${date} already complete (${existing.job_id}, ${existing.is_next_day ? 'full day' : 'same day'}), skipping`)
+    log.push(`hourly ${date} already complete (${existing.job_id}), skipping`)
   }
 
-  // Step 3: request daily report for yesterday (data is final once the day ends)
+  // Step 3: request daily report for yesterday — ONLY if never downloaded.
+  // Yahoo daily data is IMMUTABLE: once downloaded, it never changes.
+  // So we check for ANY existing job (SUCCESS, QUEUED, or RUNNING) and skip.
+  // FAILED jobs are retried at most once (avoid infinite retry loops).
   const yesterday = yesterdayStr()
   const [existingDaily] = await sql`
     SELECT job_id, status FROM report_jobs
@@ -135,7 +148,9 @@ export async function GET(req: NextRequest) {
     LIMIT 1
   `
   const dailyStatus = existingDaily?.status as string | undefined
-  if (!existingDaily || (dailyStatus !== 'QUEUED' && dailyStatus !== 'RUNNING' && dailyStatus !== 'SUCCESS')) {
+  const shouldRequestDaily = !existingDaily || (dailyStatus === 'FAILED' && !(await hasDailyData(yesterday)))
+
+  if (shouldRequestDaily) {
     try {
       const webhookUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/webhook?jobId={JOBID}&jobStatus={JOBSTATUS}&secret=${process.env.CRON_SECRET}`
       const { jobId: dailyJobId } = await requestReport(yesterday, yesterday, 'daily', webhookUrl)
@@ -149,8 +164,18 @@ export async function GET(req: NextRequest) {
       log.push(`error requesting daily report: ${String(e)}`)
     }
   } else {
-    log.push(`daily ${yesterday} already ${dailyStatus} (${existingDaily.job_id}), skipping`)
+    log.push(`daily ${yesterday} already ${dailyStatus} (${existingDaily?.job_id}), skipping`)
   }
 
   return NextResponse.json({ ok: true, date, newJobId, log })
+}
+
+// Check if we already have downloaded daily data rows for a given date
+async function hasDailyData(date: string): Promise<boolean> {
+  const [row] = await sql`
+    SELECT 1 FROM report_data
+    WHERE breakdown = 'daily' AND report_date = ${date}
+    LIMIT 1
+  `
+  return !!row
 }
