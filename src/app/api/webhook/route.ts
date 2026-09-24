@@ -29,8 +29,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function processJob(jobId: number) {
-  const [jobRow] = await sql`SELECT breakdown FROM report_jobs WHERE job_id = ${jobId}`
+  const [jobRow] = await sql`SELECT breakdown, date_from::text as date_from, date_to::text as date_to FROM report_jobs WHERE job_id = ${jobId}`
   const breakdown = jobRow?.breakdown ?? 'daily'
+  const expectedDate = jobRow?.date_from // used for validation
 
   const jobData = await getJobStatus(jobId)
   if (jobData.status !== 'SUCCESS' || !jobData.downloadLink) return
@@ -56,17 +57,25 @@ export async function processJob(jobId: number) {
     raw: row,
   }))
 
-  if (toInsert.length > 0) {
-    const dates = [...new Set(toInsert.map(r => r.report_date).filter(Boolean))]
+  // Filter to only rows matching the expected date range (guard against ENKI returning stale data)
+  const filtered = expectedDate
+    ? toInsert.filter(r => r.report_date === expectedDate)
+    : toInsert
+
+  if (filtered.length > 0) {
+    const dates = [...new Set(filtered.map(r => r.report_date).filter(Boolean))]
     if (dates.length > 0) {
       await sql`DELETE FROM report_data WHERE provider = 'enki' AND breakdown = ${breakdown} AND report_date = ANY(${dates})`
     }
-    await sql`INSERT INTO report_data ${sql(toInsert)}`
+    // Insert in batches of 500 to avoid Postgres parameter limit (65534)
+    for (let i = 0; i < filtered.length; i += 500) {
+      await sql`INSERT INTO report_data ${sql(filtered.slice(i, i + 500))}`
+    }
   }
 
   await sql`
     UPDATE report_jobs
-    SET status = 'SUCCESS', records = ${rows.length}, updated_at = NOW()
+    SET status = 'SUCCESS', records = ${filtered.length}, updated_at = NOW()
     WHERE job_id = ${jobId}
   `
 }
