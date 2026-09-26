@@ -270,6 +270,7 @@ function defaultRange() {
 export default function Dashboard() {
   const [activeProvider, setActiveProvider] = useState<ActiveProvider>('enki')
   const [activeView, setActiveView] = useState<ActiveView>('daily')
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [range, setRange] = useState(defaultRange)
   const [dailyData, setDailyData] = useState<DailyRow[]>([])
   const [hourlyData, setHourlyData] = useState<HourlyRow[]>([])
@@ -709,12 +710,58 @@ export default function Dashboard() {
         /* ── Page title ──────────────────────────────────── */
         .page-title { font-size: 11px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: #aaa; margin-bottom: 4px; }
         .page-subtitle { font-size: 20px; font-weight: 800; color: #111; letter-spacing: -0.02em; margin-right: auto; }
+
+        /* ── Mobile header ──────────────────────────────── */
+        .mobile-header {
+          display: none; position: fixed; top: 0; left: 0; right: 0; z-index: 90;
+          height: 48px; background: #111; align-items: center; padding: 0 12px;
+          gap: 12px;
+        }
+        .hamburger {
+          background: none; border: none; color: #fff; font-size: 22px;
+          cursor: pointer; padding: 4px 8px; line-height: 1;
+        }
+        .mobile-brand { font-family: 'Syne', sans-serif; font-size: 16px; font-weight: 800; color: #fff; }
+        .mobile-info { font-family: 'DM Mono', monospace; font-size: 10px; color: #666; margin-left: auto; }
+
+        .sidebar-overlay {
+          display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+          z-index: 99;
+        }
+        .sidebar-overlay.open { display: block; }
+
+        /* ── Mobile responsive ──────────────────────────── */
+        @media (max-width: 767px) {
+          .mobile-header { display: flex; }
+          .sidebar {
+            display: none; position: fixed; top: 0; left: 0; bottom: 0;
+            width: 240px; z-index: 100; height: 100vh;
+          }
+          .sidebar.open { display: flex; }
+          .main-panel { padding: 64px 12px 60px; }
+          .top-bar { flex-direction: column; align-items: stretch; gap: 12px; }
+          .date-group { width: 100%; justify-content: center; }
+          .page-subtitle { font-size: 16px; }
+          .summary-value { font-size: 16px; }
+          .summary-cell { padding: 10px 12px; }
+          .filters { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; }
+        }
       `}</style>
 
       <div className="app-layout">
 
+        {/* ── Mobile header ── */}
+        <div className="mobile-header">
+          <button className="hamburger" onClick={() => setSidebarOpen(o => !o)}>☰</button>
+          <span className="mobile-brand">Bidberry</span>
+          <span className="mobile-info">{activeProvider === 'enki' ? 'ENKI' : 'Nexify'} · {activeView}</span>
+        </div>
+
+        {/* ── Sidebar overlay ── */}
+        <div className={`sidebar-overlay${sidebarOpen ? ' open' : ''}`} onClick={() => setSidebarOpen(false)} />
+
         {/* ── Sidebar ── */}
-        <aside className="sidebar">
+        <aside className={`sidebar${sidebarOpen ? ' open' : ''}`}>
           <div className="sidebar-top">
             <span className="sidebar-brand-label">Reporting</span>
             <span className="sidebar-brand-name">Bidberry</span>
@@ -724,14 +771,14 @@ export default function Dashboard() {
             <div className="sidebar-section">Providers</div>
             <button
               className={`sidebar-btn ${activeProvider === 'enki' ? 'active' : ''}`}
-              onClick={() => setActiveProvider('enki')}
+              onClick={() => { setActiveProvider('enki'); setSidebarOpen(false) }}
             >
               <span className="provider-dot" style={{ background: '#c2800a' }} />
               ENKI
             </button>
             <button
               className={`sidebar-btn ${activeProvider === 'nexify' ? 'active' : ''}`}
-              onClick={() => setActiveProvider('nexify')}
+              onClick={() => { setActiveProvider('nexify'); setSidebarOpen(false) }}
             >
               <span className="provider-dot" style={{ background: '#3b82f6' }} />
               Nexify
@@ -740,19 +787,19 @@ export default function Dashboard() {
             <div className="sidebar-section">View</div>
             <button
               className={`sidebar-btn ${activeView === 'daily' ? 'active' : ''}`}
-              onClick={() => setActiveView('daily')}
+              onClick={() => { setActiveView('daily'); setSidebarOpen(false) }}
             >
               Daily
             </button>
             <button
               className={`sidebar-btn ${activeView === 'hourly' ? 'active' : ''}`}
-              onClick={() => setActiveView('hourly')}
+              onClick={() => { setActiveView('hourly'); setSidebarOpen(false) }}
             >
               Hourly
             </button>
             <button
               className={`sidebar-btn ${activeView === 'analytics' ? 'active' : ''}`}
-              onClick={() => setActiveView('analytics')}
+              onClick={() => { setActiveView('analytics'); setSidebarOpen(false) }}
             >
               Analytics
             </button>
