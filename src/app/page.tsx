@@ -336,7 +336,7 @@ export default function Dashboard() {
   useEffect(() => { fetchNexify(range.from, range.to) }, [fetchNexify, range.from, range.to])
 
   useEffect(() => {
-    const id = setInterval(() => { fetchData() }, 5 * 60 * 1000)
+    const id = setInterval(() => { fetchData() }, 30 * 60 * 1000)
     return () => clearInterval(id)
   }, [fetchData])
 
@@ -359,7 +359,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     runSync()
-    const id = setInterval(runSync, 2 * 60 * 1000)
+    const id = setInterval(runSync, 15 * 60 * 1000)
     return () => clearInterval(id)
   }, [runSync])
 

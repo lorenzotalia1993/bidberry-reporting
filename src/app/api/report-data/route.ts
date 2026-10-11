@@ -1,93 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import sql from '@/lib/db'
 
-type AggRow = {
-  config_name: string; market: string; device: string; ads_query: string
-  revenue: number; amount_eur: number; clicks: number
-  searches: number; bidded_searches: number; bidded_results: number
-}
-
-type NexifyAggRow = AggRow & {
-  domain: string; source_type: string; tq_score: string
-  coverage: number; ctr: number
-}
-
-function aggregate(data: Record<string, unknown>[], keyFields: string[]): AggRow[] {
-  const agg: Record<string, AggRow> = {}
-  for (const row of data) {
-    const key = keyFields.map(f => String(row[f] ?? '')).join('|__|')
-    if (!agg[key]) {
-      agg[key] = {
-        config_name: String(row.config_name ?? '(unknown)'),
-        market: String(row.market ?? ''),
-        device: String(row.device ?? ''),
-        ads_query: String(row.ads_query ?? ''),
-        revenue: 0, amount_eur: 0, clicks: 0, searches: 0, bidded_searches: 0, bidded_results: 0,
-        ...Object.fromEntries(keyFields.filter(f => !['config_name','market','device','ads_query'].includes(f)).map(f => [f, row[f]])),
-      } as AggRow
-    }
-    agg[key].revenue += Number(row.revenue ?? 0)
-    agg[key].amount_eur += Number(row.amount_eur ?? 0)
-    agg[key].clicks += Number(row.clicks ?? 0)
-    agg[key].searches += Number(row.searches ?? 0)
-    agg[key].bidded_searches += Number(row.bidded_searches ?? 0)
-    agg[key].bidded_results += Number(row.bidded_results ?? 0)
-  }
-  return Object.values(agg)
-}
-
-function aggregateNexify(data: Record<string, unknown>[], keyFields: string[]): NexifyAggRow[] {
-  const agg: Record<string, NexifyAggRow> = {}
-  for (const row of data) {
-    const key = keyFields.map(f => String(row[f] ?? '')).join('|__|')
-    if (!agg[key]) {
-      agg[key] = {
-        config_name: String(row.config_name ?? '(unknown)'),
-        domain: String(row.domain ?? ''),
-        market: String(row.market ?? ''),
-        device: String(row.device ?? ''),
-        ads_query: String(row.ads_query ?? ''),
-        source_type: String(row.source_type ?? ''),
-        tq_score: String(row.tq_score ?? ''),
-        coverage: 0, ctr: 0,
-        revenue: 0, amount_eur: 0, clicks: 0, searches: 0, bidded_searches: 0, bidded_results: 0,
-        ...Object.fromEntries(keyFields.filter(f => !['config_name','domain','market','device','ads_query','source_type','tq_score'].includes(f)).map(f => [f, row[f]])),
-      } as NexifyAggRow
-    }
-    agg[key].revenue += Number(row.revenue ?? 0)
-    agg[key].amount_eur += Number(row.amount_eur ?? 0)
-    agg[key].clicks += Number(row.clicks ?? 0)
-    agg[key].searches += Number(row.searches ?? 0)
-    agg[key].bidded_searches += Number(row.bidded_searches ?? 0)
-    agg[key].bidded_results += Number(row.bidded_results ?? 0)
-    agg[key].coverage += Number(row.coverage ?? 0)
-    agg[key].ctr += Number(row.ctr ?? 0)
-  }
-  return Object.values(agg)
-}
-
-// Safely extract YYYY-MM-DD from a postgres date value regardless of how
-// the driver serializes it (ISO string, Date object, or Date.toString() format)
-function toDateStr(d: unknown): string {
-  if (!d) return ''
-  if (d instanceof Date) {
-    const y = d.getUTCFullYear()
-    const m = String(d.getUTCMonth() + 1).padStart(2, '0')
-    const day = String(d.getUTCDate()).padStart(2, '0')
-    return `${y}-${m}-${day}`
-  }
-  const s = String(d)
-  // ISO format: "2026-06-10T00:00:00.000Z"
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10)
-  // Date.toString() format: "Wed Jun 10 2026 00:00:00 GMT+0000 ..."
-  const m = s.match(/(\w{3})\s+(\d{1,2})\s+(\d{4})/)
-  if (m) {
-    const months: Record<string, string> = { Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12' }
-    return `${m[3]}-${months[m[1]] ?? '01'}-${m[2].padStart(2, '0')}`
-  }
-  return s.split('T')[0]
-}
-
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl
   const from = searchParams.get('from')
@@ -102,135 +15,107 @@ export async function GET(req: NextRequest) {
 
   // ── Nexify path ─────────────────────────────────────────────────────────────
   if (provider === 'nexify') {
-    const data = await sql`
-      SELECT config_name, domain, market, device, ads_query, source_type, tq_score,
-             coverage, ctr, report_date, report_hour,
-             revenue, amount_eur, clicks, searches, bidded_searches, bidded_results
-      FROM report_data
-      WHERE provider = 'nexify'
-        AND breakdown = ${dbBreakdown}
-        AND report_date >= ${from}
-        AND report_date <= ${to}
-      ORDER BY report_date ASC
-    `
-
     if (breakdown === 'trend') {
-      const agg: Record<string, { report_date: string; revenue: number; clicks: number; searches: number; bidded_searches: number }> = {}
-      for (const row of data as Record<string, unknown>[]) {
-        const dateStr = toDateStr(row.report_date)
-        if (!agg[dateStr]) agg[dateStr] = { report_date: dateStr, revenue: 0, clicks: 0, searches: 0, bidded_searches: 0 }
-        agg[dateStr].revenue += Number(row.revenue ?? 0)
-        agg[dateStr].clicks += Number(row.clicks ?? 0)
-        agg[dateStr].searches += Number(row.searches ?? 0)
-        agg[dateStr].bidded_searches += Number(row.bidded_searches ?? 0)
-      }
-      return NextResponse.json(Object.values(agg).sort((a, b) => a.report_date.localeCompare(b.report_date)))
+      const data = await sql`
+        SELECT report_date::text as report_date,
+               SUM(revenue) as revenue, SUM(clicks) as clicks,
+               SUM(searches) as searches, SUM(bidded_searches) as bidded_searches
+        FROM report_data
+        WHERE provider = 'nexify'
+          AND breakdown = ${dbBreakdown}
+          AND report_date >= ${from}
+          AND report_date <= ${to}
+        GROUP BY report_date
+        ORDER BY report_date ASC
+      `
+      return NextResponse.json(data)
     }
 
     if (breakdown === 'daily') {
-      const result = aggregateNexify(data as Record<string, unknown>[], ['config_name', 'domain', 'market', 'device', 'ads_query', 'source_type', 'tq_score'])
-        .sort((a, b) => b.revenue - a.revenue || b.searches - a.searches)
-      return NextResponse.json(result)
+      const data = await sql`
+        SELECT config_name, domain, market, device, ads_query, source_type, tq_score,
+               SUM(coverage) as coverage, SUM(ctr) as ctr,
+               SUM(revenue) as revenue, SUM(amount_eur) as amount_eur,
+               SUM(clicks) as clicks, SUM(searches) as searches,
+               SUM(bidded_searches) as bidded_searches, SUM(bidded_results) as bidded_results
+        FROM report_data
+        WHERE provider = 'nexify'
+          AND breakdown = 'daily'
+          AND report_date >= ${from}
+          AND report_date <= ${to}
+        GROUP BY config_name, domain, market, device, ads_query, source_type, tq_score
+        ORDER BY SUM(revenue) DESC, SUM(searches) DESC
+      `
+      return NextResponse.json(data)
     }
 
     // Nexify hourly
-    type NexifyHourlyRow = NexifyAggRow & { report_date: unknown; report_hour: number }
-    const agg: Record<string, NexifyHourlyRow> = {}
-    for (const row of data as Record<string, unknown>[]) {
-      const dateStr = toDateStr(row.report_date)
-      const key = [dateStr, row.report_hour, row.domain, row.config_name, row.market, row.device, row.ads_query, row.source_type].join('|__|')
-      if (!agg[key]) {
-        agg[key] = {
-          report_date: dateStr,
-          report_hour: Number(row.report_hour ?? 0),
-          config_name: String(row.config_name ?? '(unknown)'),
-          domain: String(row.domain ?? ''),
-          market: String(row.market ?? ''),
-          device: String(row.device ?? ''),
-          ads_query: String(row.ads_query ?? ''),
-          source_type: String(row.source_type ?? ''),
-          tq_score: String(row.tq_score ?? ''),
-          coverage: 0, ctr: 0,
-          revenue: 0, amount_eur: 0, clicks: 0, searches: 0, bidded_searches: 0, bidded_results: 0,
-        }
-      }
-      agg[key].revenue += Number(row.revenue ?? 0)
-      agg[key].amount_eur += Number(row.amount_eur ?? 0)
-      agg[key].clicks += Number(row.clicks ?? 0)
-      agg[key].searches += Number(row.searches ?? 0)
-      agg[key].bidded_searches += Number(row.bidded_searches ?? 0)
-      agg[key].bidded_results += Number(row.bidded_results ?? 0)
-      agg[key].coverage += Number(row.coverage ?? 0)
-      agg[key].ctr += Number(row.ctr ?? 0)
-    }
-    const nexifyResult = Object.values(agg).sort((a, b) => {
-      if (a.report_date !== b.report_date) return String(b.report_date).localeCompare(String(a.report_date))
-      if (a.report_hour !== b.report_hour) return (a.report_hour as number) - (b.report_hour as number)
-      return a.domain.localeCompare(b.domain)
-    })
-    return NextResponse.json(nexifyResult)
+    const data = await sql`
+      SELECT report_date::text as report_date, report_hour,
+             config_name, domain, market, device, ads_query, source_type, tq_score,
+             SUM(coverage) as coverage, SUM(ctr) as ctr,
+             SUM(revenue) as revenue, SUM(amount_eur) as amount_eur,
+             SUM(clicks) as clicks, SUM(searches) as searches,
+             SUM(bidded_searches) as bidded_searches, SUM(bidded_results) as bidded_results
+      FROM report_data
+      WHERE provider = 'nexify'
+        AND breakdown = 'hourly'
+        AND report_date >= ${from}
+        AND report_date <= ${to}
+      GROUP BY report_date, report_hour, config_name, domain, market, device, ads_query, source_type, tq_score
+      ORDER BY report_date DESC, report_hour ASC, domain ASC
+    `
+    return NextResponse.json(data)
   }
 
   // ── ENKI path (default) ──────────────────────────────────────────────────────
-  const data = await sql`
-    SELECT config_name, market, device, ads_query, report_date, report_hour,
-           revenue, amount_eur, clicks, searches, bidded_searches, bidded_results
-    FROM report_data
-    WHERE provider = 'enki'
-      AND breakdown = ${dbBreakdown}
-      AND report_date >= ${from}
-      AND report_date <= ${to}
-    ORDER BY report_date ASC
-  `
-
   if (breakdown === 'trend') {
-    const agg: Record<string, { report_date: string; revenue: number; clicks: number; searches: number; bidded_searches: number }> = {}
-    for (const row of data as Record<string, unknown>[]) {
-      const dateStr = toDateStr(row.report_date)
-      if (!agg[dateStr]) agg[dateStr] = { report_date: dateStr, revenue: 0, clicks: 0, searches: 0, bidded_searches: 0 }
-      agg[dateStr].revenue += Number(row.revenue ?? 0)
-      agg[dateStr].clicks += Number(row.clicks ?? 0)
-      agg[dateStr].searches += Number(row.searches ?? 0)
-      agg[dateStr].bidded_searches += Number(row.bidded_searches ?? 0)
-    }
-    return NextResponse.json(Object.values(agg).sort((a, b) => a.report_date.localeCompare(b.report_date)))
+    const data = await sql`
+      SELECT report_date::text as report_date,
+             SUM(revenue) as revenue, SUM(clicks) as clicks,
+             SUM(searches) as searches, SUM(bidded_searches) as bidded_searches
+      FROM report_data
+      WHERE provider = 'enki'
+        AND breakdown = ${dbBreakdown}
+        AND report_date >= ${from}
+        AND report_date <= ${to}
+      GROUP BY report_date
+      ORDER BY report_date ASC
+    `
+    return NextResponse.json(data)
   }
 
   if (breakdown === 'daily') {
-    const result = aggregate(data as Record<string, unknown>[], ['config_name', 'market', 'device', 'ads_query'])
-      .sort((a, b) => b.revenue - a.revenue || b.searches - a.searches)
-    return NextResponse.json(result)
+    const data = await sql`
+      SELECT config_name, market, device, ads_query,
+             SUM(revenue) as revenue, SUM(amount_eur) as amount_eur,
+             SUM(clicks) as clicks, SUM(searches) as searches,
+             SUM(bidded_searches) as bidded_searches, SUM(bidded_results) as bidded_results
+      FROM report_data
+      WHERE provider = 'enki'
+        AND breakdown = 'daily'
+        AND report_date >= ${from}
+        AND report_date <= ${to}
+      GROUP BY config_name, market, device, ads_query
+      ORDER BY SUM(revenue) DESC, SUM(searches) DESC
+    `
+    return NextResponse.json(data)
   }
 
   // ENKI hourly
-  type HourlyAggRow = AggRow & { report_date: unknown; report_hour: number }
-  const agg: Record<string, HourlyAggRow> = {}
-  for (const row of data) {
-    const dateStr = toDateStr(row.report_date)
-    const key = [dateStr, row.report_hour, row.config_name, row.market, row.device, row.ads_query].join('|__|')
-    if (!agg[key]) {
-      agg[key] = {
-        report_date: dateStr,
-        report_hour: Number(row.report_hour ?? 0),
-        config_name: String(row.config_name ?? '(unknown)'),
-        market: String(row.market ?? ''),
-        device: String(row.device ?? ''),
-        ads_query: String(row.ads_query ?? ''),
-        revenue: 0, amount_eur: 0, clicks: 0, searches: 0, bidded_searches: 0, bidded_results: 0,
-      }
-    }
-    agg[key].revenue += Number(row.revenue ?? 0)
-    agg[key].amount_eur += Number(row.amount_eur ?? 0)
-    agg[key].clicks += Number(row.clicks ?? 0)
-    agg[key].searches += Number(row.searches ?? 0)
-    agg[key].bidded_searches += Number(row.bidded_searches ?? 0)
-    agg[key].bidded_results += Number(row.bidded_results ?? 0)
-  }
-
-  const result = Object.values(agg).sort((a, b) => {
-    if (a.report_date !== b.report_date) return String(b.report_date).localeCompare(String(a.report_date))
-    if (a.report_hour !== b.report_hour) return a.report_hour - b.report_hour
-    return a.config_name.localeCompare(b.config_name)
-  })
-  return NextResponse.json(result)
+  const data = await sql`
+    SELECT report_date::text as report_date, report_hour,
+           config_name, market, device, ads_query,
+           SUM(revenue) as revenue, SUM(amount_eur) as amount_eur,
+           SUM(clicks) as clicks, SUM(searches) as searches,
+           SUM(bidded_searches) as bidded_searches, SUM(bidded_results) as bidded_results
+    FROM report_data
+    WHERE provider = 'enki'
+      AND breakdown = 'hourly'
+      AND report_date >= ${from}
+      AND report_date <= ${to}
+    GROUP BY report_date, report_hour, config_name, market, device, ads_query
+    ORDER BY report_date DESC, report_hour ASC, config_name ASC
+  `
+  return NextResponse.json(data)
 }

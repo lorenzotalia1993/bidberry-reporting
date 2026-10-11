@@ -54,7 +54,7 @@ export async function processJob(jobId: number) {
     market: row.market || null,
     device: row.device || null,
     placement: row.placement || null,
-    raw: row,
+    raw: null,
   }))
 
   // Filter to only rows matching the expected date range (guard against ENKI returning stale data)
