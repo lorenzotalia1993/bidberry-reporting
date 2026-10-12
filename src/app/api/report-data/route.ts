@@ -18,8 +18,10 @@ export async function GET(req: NextRequest) {
     if (breakdown === 'trend') {
       const data = await sql`
         SELECT report_date::text as report_date,
-               SUM(revenue) as revenue, SUM(clicks) as clicks,
-               SUM(searches) as searches, SUM(bidded_searches) as bidded_searches
+               COALESCE(SUM(revenue), 0)::float as revenue,
+               COALESCE(SUM(clicks), 0)::int as clicks,
+               COALESCE(SUM(searches), 0)::int as searches,
+               COALESCE(SUM(bidded_searches), 0)::int as bidded_searches
         FROM report_data
         WHERE provider = 'nexify'
           AND breakdown = ${dbBreakdown}
@@ -34,10 +36,14 @@ export async function GET(req: NextRequest) {
     if (breakdown === 'daily') {
       const data = await sql`
         SELECT config_name, domain, market, device, ads_query, source_type, tq_score,
-               SUM(coverage) as coverage, SUM(ctr) as ctr,
-               SUM(revenue) as revenue, SUM(amount_eur) as amount_eur,
-               SUM(clicks) as clicks, SUM(searches) as searches,
-               SUM(bidded_searches) as bidded_searches, SUM(bidded_results) as bidded_results
+               COALESCE(SUM(coverage), 0)::float as coverage,
+               COALESCE(SUM(ctr), 0)::float as ctr,
+               COALESCE(SUM(revenue), 0)::float as revenue,
+               COALESCE(SUM(amount_eur), 0)::float as amount_eur,
+               COALESCE(SUM(clicks), 0)::int as clicks,
+               COALESCE(SUM(searches), 0)::int as searches,
+               COALESCE(SUM(bidded_searches), 0)::int as bidded_searches,
+               COALESCE(SUM(bidded_results), 0)::int as bidded_results
         FROM report_data
         WHERE provider = 'nexify'
           AND breakdown = 'daily'
@@ -53,10 +59,14 @@ export async function GET(req: NextRequest) {
     const data = await sql`
       SELECT report_date::text as report_date, report_hour,
              config_name, domain, market, device, ads_query, source_type, tq_score,
-             SUM(coverage) as coverage, SUM(ctr) as ctr,
-             SUM(revenue) as revenue, SUM(amount_eur) as amount_eur,
-             SUM(clicks) as clicks, SUM(searches) as searches,
-             SUM(bidded_searches) as bidded_searches, SUM(bidded_results) as bidded_results
+             COALESCE(SUM(coverage), 0)::float as coverage,
+             COALESCE(SUM(ctr), 0)::float as ctr,
+             COALESCE(SUM(revenue), 0)::float as revenue,
+             COALESCE(SUM(amount_eur), 0)::float as amount_eur,
+             COALESCE(SUM(clicks), 0)::int as clicks,
+             COALESCE(SUM(searches), 0)::int as searches,
+             COALESCE(SUM(bidded_searches), 0)::int as bidded_searches,
+             COALESCE(SUM(bidded_results), 0)::int as bidded_results
       FROM report_data
       WHERE provider = 'nexify'
         AND breakdown = 'hourly'
@@ -72,8 +82,10 @@ export async function GET(req: NextRequest) {
   if (breakdown === 'trend') {
     const data = await sql`
       SELECT report_date::text as report_date,
-             SUM(revenue) as revenue, SUM(clicks) as clicks,
-             SUM(searches) as searches, SUM(bidded_searches) as bidded_searches
+             COALESCE(SUM(revenue), 0)::float as revenue,
+             COALESCE(SUM(clicks), 0)::int as clicks,
+             COALESCE(SUM(searches), 0)::int as searches,
+             COALESCE(SUM(bidded_searches), 0)::int as bidded_searches
       FROM report_data
       WHERE provider = 'enki'
         AND breakdown = ${dbBreakdown}
@@ -88,9 +100,12 @@ export async function GET(req: NextRequest) {
   if (breakdown === 'daily') {
     const data = await sql`
       SELECT config_name, market, device, ads_query,
-             SUM(revenue) as revenue, SUM(amount_eur) as amount_eur,
-             SUM(clicks) as clicks, SUM(searches) as searches,
-             SUM(bidded_searches) as bidded_searches, SUM(bidded_results) as bidded_results
+             COALESCE(SUM(revenue), 0)::float as revenue,
+             COALESCE(SUM(amount_eur), 0)::float as amount_eur,
+             COALESCE(SUM(clicks), 0)::int as clicks,
+             COALESCE(SUM(searches), 0)::int as searches,
+             COALESCE(SUM(bidded_searches), 0)::int as bidded_searches,
+             COALESCE(SUM(bidded_results), 0)::int as bidded_results
       FROM report_data
       WHERE provider = 'enki'
         AND breakdown = 'daily'
@@ -106,9 +121,12 @@ export async function GET(req: NextRequest) {
   const data = await sql`
     SELECT report_date::text as report_date, report_hour,
            config_name, market, device, ads_query,
-           SUM(revenue) as revenue, SUM(amount_eur) as amount_eur,
-           SUM(clicks) as clicks, SUM(searches) as searches,
-           SUM(bidded_searches) as bidded_searches, SUM(bidded_results) as bidded_results
+           COALESCE(SUM(revenue), 0)::float as revenue,
+           COALESCE(SUM(amount_eur), 0)::float as amount_eur,
+           COALESCE(SUM(clicks), 0)::int as clicks,
+           COALESCE(SUM(searches), 0)::int as searches,
+           COALESCE(SUM(bidded_searches), 0)::int as bidded_searches,
+           COALESCE(SUM(bidded_results), 0)::int as bidded_results
     FROM report_data
     WHERE provider = 'enki'
       AND breakdown = 'hourly'
