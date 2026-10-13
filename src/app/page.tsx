@@ -528,6 +528,29 @@ export default function Dashboard() {
   )
   const nxTotals = activeView === 'daily' ? nxDailyTotals : nxHourlyTotals
 
+  // Detect incomplete hourly data (less than 24 hours covered)
+  const enkiHoursCovered = new Set(hourlyData.map(r => `${r.report_date}|${r.report_hour}`))
+  const enkiDatesInHourly = [...new Set(hourlyData.map(r => String(r.report_date)))]
+  const enkiIncompleteHourly = enkiDatesInHourly.some(d => {
+    const hoursForDate = [...enkiHoursCovered].filter(h => h.startsWith(d + '|')).length
+    return hoursForDate > 0 && hoursForDate < 24
+  })
+  const enkiHourlySummary = enkiDatesInHourly.map(d => {
+    const count = [...enkiHoursCovered].filter(h => h.startsWith(d + '|')).length
+    return { date: d, hours: count }
+  }).filter(x => x.hours < 24)
+
+  const nxHoursCovered = new Set(nexifyHourlyData.map(r => `${r.report_date}|${r.report_hour}`))
+  const nxDatesInHourly = [...new Set(nexifyHourlyData.map(r => String(r.report_date)))]
+  const nxIncompleteHourly = nxDatesInHourly.some(d => {
+    const hoursForDate = [...nxHoursCovered].filter(h => h.startsWith(d + '|')).length
+    return hoursForDate > 0 && hoursForDate < 24
+  })
+  const nxHourlySummary = nxDatesInHourly.map(d => {
+    const count = [...nxHoursCovered].filter(h => h.startsWith(d + '|')).length
+    return { date: d, hours: count }
+  }).filter(x => x.hours < 24)
+
   return (
     <>
       <style>{`
@@ -648,6 +671,7 @@ export default function Dashboard() {
           font-size: 12px; color: #555; }
 
         /* ── Filters ─────────────────────────────────────── */
+        .hourly-warning { background: #2a1f00; border: 1px solid #c2800a; color: #f5c542; padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-top: 16px; line-height: 1.4; }
         .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
         .filter-select {
           height: 34px; padding: 0 10px; background: #fff; border: 1px solid #dddcd8;
@@ -932,6 +956,11 @@ export default function Dashboard() {
                   <button className="filter-clear" onClick={() => setFilters({ config: '', query: '', device: '', hour: '' })}>Clear</button>
                 )}
               </div>
+              {enkiIncompleteHourly && (
+                <div className="hourly-warning">
+                  Hourly data incomplete — {enkiHourlySummary.map(x => `${x.date}: ${x.hours}/24h`).join(', ')}. Totals may differ from the daily report.
+                </div>
+              )}
               <div className="summary">
                 {[
                   { label: 'Revenue (USD)', value: `$${fmt(hourlyTotals.revenue)}`, amber: true },
@@ -1165,6 +1194,11 @@ export default function Dashboard() {
           {/* ────────────────────────── Nexify Hourly ─── */}
           {activeProvider === 'nexify' && activeView === 'hourly' && (
             <>
+              {nxIncompleteHourly && (
+                <div className="hourly-warning">
+                  Hourly data incomplete — {nxHourlySummary.map(x => `${x.date}: ${x.hours}/24h`).join(', ')}. Totals may differ from the daily report.
+                </div>
+              )}
               <div className="filters">
                 {uniqueNxHDomains.length > 0 && (
                   <select className="filter-select" value={nexifyFilters.domain} onChange={e => setNexifyFilters(f => ({ ...f, domain: e.target.value }))}>
