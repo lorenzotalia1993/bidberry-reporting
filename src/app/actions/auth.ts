@@ -1,11 +1,22 @@
 'use server'
 
 import { redirect } from 'next/navigation'
+import { headers } from 'next/headers'
 import bcrypt from 'bcryptjs'
 import sql from '@/lib/db'
 import { createSession, deleteSession } from '@/lib/session'
+import { rateLimit } from '@/lib/rate-limit'
+
+const loginLimiter = rateLimit({ name: 'login', max: 5, windowSec: 15 * 60 })
 
 export async function login(_prev: { error?: string } | undefined, formData: FormData) {
+  const h = await headers()
+  const ip = h.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown'
+  const rl = loginLimiter.check(ip)
+  if (!rl.ok) {
+    return { error: `Troppi tentativi. Riprova tra ${Math.ceil(rl.retryAfter / 60)} minuti.` }
+  }
+
   const email = (formData.get('email') as string)?.trim().toLowerCase()
   const password = formData.get('password') as string
 

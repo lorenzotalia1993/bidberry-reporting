@@ -14,7 +14,7 @@ export async function encrypt(payload: SessionPayload) {
   return new SignJWT(payload as unknown as Record<string, unknown>)
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
-    .setExpirationTime('7d')
+    .setExpirationTime('24h')
     .sign(encodedKey)
 }
 

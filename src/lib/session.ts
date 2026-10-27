@@ -6,7 +6,7 @@ export type { SessionPayload }
 export { encrypt, decrypt }
 
 export async function createSession(user: { id: number; email: string; is_admin: boolean }, allowedTags: string[]) {
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000)
   const session = await encrypt({
     userId: user.id,
     email: user.email,

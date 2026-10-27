@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createHash } from 'crypto'
 import sql from '@/lib/db'
+import { rateLimit } from '@/lib/rate-limit'
+
+const apiLimiter = rateLimit({ name: 'api', max: 60, windowSec: 60 })
 
 export async function GET(req: NextRequest) {
   const auth = req.headers.get('authorization')
@@ -19,6 +22,14 @@ export async function GET(req: NextRequest) {
 
   if (!apiKey || apiKey.revoked_at) {
     return NextResponse.json({ error: 'Invalid or revoked API key' }, { status: 401 })
+  }
+
+  const rl = apiLimiter.check(keyHash)
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: 'Rate limit exceeded' },
+      { status: 429, headers: { 'Retry-After': String(rl.retryAfter) } }
+    )
   }
 
   const tags = await sql`SELECT config_name FROM user_tag_permissions WHERE user_id = ${apiKey.user_id}`
