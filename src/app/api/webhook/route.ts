@@ -1,13 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { timingSafeEqual } from 'crypto'
 import { getJobStatus, downloadReport } from '@/lib/enki'
 import sql from '@/lib/db'
+
+function safeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b))
+}
+
+const VALID_STATUSES = new Set(['QUEUED', 'RUNNING', 'SUCCESS', 'FAILED'])
 
 // GET /api/webhook?jobId=...&jobStatus=...&secret=...
 // Called by ENKI when a job completes
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl
   const secret = searchParams.get('secret')
-  if (secret !== process.env.CRON_SECRET) {
+  const envSecret = process.env.CRON_SECRET?.trim()
+  if (!envSecret || !secret || !safeCompare(secret.trim(), envSecret)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
@@ -15,7 +24,7 @@ export async function GET(req: NextRequest) {
   const jobStatus = searchParams.get('jobStatus')
 
   if (!jobId || jobStatus !== 'SUCCESS') {
-    if (jobId && jobStatus) {
+    if (jobId && jobStatus && VALID_STATUSES.has(jobStatus)) {
       await sql`
         UPDATE report_jobs SET status = ${jobStatus}, updated_at = NOW()
         WHERE job_id = ${jobId}

@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { timingSafeEqual } from 'crypto'
 import { fetchNexifyDaily, fetchNexifyHourly } from '@/lib/nexify'
 import sql from '@/lib/db'
+
+function safeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b))
+}
 
 function todayStr() {
   return new Date().toISOString().split('T')[0]
@@ -16,8 +22,13 @@ function yesterdayStr() {
 export async function GET(req: NextRequest) {
   const auth = req.headers.get('authorization') ?? ''
   const secret = req.nextUrl.searchParams.get('secret')
-  const envSecret = (process.env.CRON_SECRET ?? 'bidberry2026').trim()
-  if (auth !== `Bearer ${envSecret}` && (secret ?? '').trim() !== envSecret) {
+  const envSecret = process.env.CRON_SECRET?.trim()
+  if (!envSecret) {
+    return NextResponse.json({ error: 'CRON_SECRET not configured' }, { status: 500 })
+  }
+  const headerMatch = auth.startsWith('Bearer ') && safeCompare(auth.slice(7), envSecret)
+  const paramMatch = !!secret && safeCompare(secret.trim(), envSecret)
+  if (!headerMatch && !paramMatch) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
