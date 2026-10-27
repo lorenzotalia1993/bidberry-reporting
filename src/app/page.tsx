@@ -267,6 +267,12 @@ function defaultRange() {
   return { from: toStr(from), to: toStr(to) }
 }
 
+interface UserInfo {
+  email: string
+  isAdmin: boolean
+  allowedTags: string[]
+}
+
 export default function Dashboard() {
   const [activeProvider, setActiveProvider] = useState<ActiveProvider>('enki')
   const [activeView, setActiveView] = useState<ActiveView>('daily')
@@ -287,6 +293,14 @@ export default function Dashboard() {
   const [nexifyTrendData, setNexifyTrendData] = useState<TrendRow[]>([])
   const [nexifyLoading, setNexifyLoading] = useState(false)
   const [nexifyFilters, setNexifyFilters] = useState({ domain: '', source: '', device: '', hour: '' })
+  const [userInfo, setUserInfo] = useState<UserInfo | null>(null)
+
+  const providerLabel = (p: ActiveProvider) =>
+    p === 'enki' ? (userInfo?.isAdmin ? 'ENKI' : 'Yahoo') : 'Nexify'
+
+  useEffect(() => {
+    fetch('/api/me').then(r => r.ok ? r.json() : null).then(setUserInfo)
+  }, [])
 
   const fetchAll = useCallback(async (from: string, to: string) => {
     if (!from || !to) return
@@ -777,8 +791,8 @@ export default function Dashboard() {
         {/* ── Mobile header ── */}
         <div className="mobile-header">
           <button className="hamburger" onClick={() => setSidebarOpen(o => !o)}>☰</button>
-          <span className="mobile-brand">Bidberry</span>
-          <span className="mobile-info">{activeProvider === 'enki' ? 'ENKI' : 'Nexify'} · {activeView}</span>
+          <span className="mobile-brand">Yahoo Reporting</span>
+          <span className="mobile-info">{providerLabel(activeProvider)} · {activeView}</span>
         </div>
 
         {/* ── Sidebar overlay ── */}
@@ -788,7 +802,7 @@ export default function Dashboard() {
         <aside className={`sidebar${sidebarOpen ? ' open' : ''}`}>
           <div className="sidebar-top">
             <span className="sidebar-brand-label">Reporting</span>
-            <span className="sidebar-brand-name">Bidberry</span>
+            <span className="sidebar-brand-name">Yahoo</span>
           </div>
 
           <nav className="sidebar-nav">
@@ -798,15 +812,17 @@ export default function Dashboard() {
               onClick={() => { setActiveProvider('enki'); setSidebarOpen(false) }}
             >
               <span className="provider-dot" style={{ background: '#c2800a' }} />
-              ENKI
+              {providerLabel('enki')}
             </button>
-            <button
-              className={`sidebar-btn ${activeProvider === 'nexify' ? 'active' : ''}`}
-              onClick={() => { setActiveProvider('nexify'); setSidebarOpen(false) }}
-            >
-              <span className="provider-dot" style={{ background: '#3b82f6' }} />
-              Nexify
-            </button>
+            {userInfo?.isAdmin && (
+              <button
+                className={`sidebar-btn ${activeProvider === 'nexify' ? 'active' : ''}`}
+                onClick={() => { setActiveProvider('nexify'); setSidebarOpen(false) }}
+              >
+                <span className="provider-dot" style={{ background: '#3b82f6' }} />
+                Nexify
+              </button>
+            )}
 
             <div className="sidebar-section">View</div>
             <button
@@ -836,6 +852,15 @@ export default function Dashboard() {
                 ? lastUpdated.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                 : '—'}</span>
             </div>
+            {userInfo && (
+              <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11 }}>
+                <span style={{ color: '#666' }}>{userInfo.email}</span>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {userInfo.isAdmin && <a href="/admin" style={{ color: '#c2800a' }}>Admin</a>}
+                  <button onClick={() => { fetch('/api/me'); document.cookie = 'session=; path=/; max-age=0'; window.location.href = '/login' }} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 0, fontSize: 11 }}>Logout</button>
+                </div>
+              </div>
+            )}
           </div>
         </aside>
 
@@ -845,7 +870,7 @@ export default function Dashboard() {
           {/* Top bar */}
           <div className="top-bar">
             <div>
-              <div className="page-title">{activeProvider === 'enki' ? 'ENKI' : 'Nexify'}</div>
+              <div className="page-title">{providerLabel(activeProvider)}</div>
               <div className="page-subtitle">
                 {activeView === 'daily' ? 'Daily Report' : activeView === 'hourly' ? 'Hourly Report' : 'Analytics'}
               </div>
@@ -863,6 +888,8 @@ export default function Dashboard() {
           </div>
 
           {error && <div className="error-msg">{error}</div>}
+
+          {/* tag filter banner removed */}
 
           {/* ────────────────────────── ENKI Daily ─── */}
           {activeProvider === 'enki' && activeView === 'daily' && (

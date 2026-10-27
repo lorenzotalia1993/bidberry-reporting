@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import sql from '@/lib/db'
+import { getSession } from '@/lib/session'
 
 export async function GET(req: NextRequest) {
+  const session = await getSession()
+  if (!session) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   const { searchParams } = req.nextUrl
   const from = searchParams.get('from')
   const to = searchParams.get('to')
@@ -12,6 +18,20 @@ export async function GET(req: NextRequest) {
   if (!from || !to) {
     return NextResponse.json([], { status: 200 })
   }
+
+  // Non-admin users: no nexify, only allowed tags
+  if (!session.isAdmin) {
+    if (provider === 'nexify') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
+    const allowedTags = session.allowedTags
+    if (!allowedTags || allowedTags.length === 0) {
+      return NextResponse.json([])
+    }
+    return NextResponse.json(await queryEnki(from, to, breakdown, dbBreakdown, allowedTags))
+  }
+
+  // ── Admin: full access ──────────────────────────────────────────────────────
 
   // ── Nexify path ─────────────────────────────────────────────────────────────
   if (provider === 'nexify') {
@@ -78,9 +98,15 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(data)
   }
 
-  // ── ENKI path (default) ──────────────────────────────────────────────────────
+  // ── ENKI path (admin, no tag filter) ────────────────────────────────────────
+  return NextResponse.json(await queryEnki(from, to, breakdown, dbBreakdown, null))
+}
+
+async function queryEnki(from: string, to: string, breakdown: string, dbBreakdown: string, allowedTags: string[] | null) {
+  const tagFilter = allowedTags ? sql`AND config_name = ANY(${allowedTags}::text[])` : sql``
+
   if (breakdown === 'trend') {
-    const data = await sql`
+    return sql`
       SELECT report_date::text as report_date,
              COALESCE(SUM(revenue), 0)::float as revenue,
              COALESCE(SUM(clicks), 0)::int as clicks,
@@ -91,14 +117,14 @@ export async function GET(req: NextRequest) {
         AND breakdown = ${dbBreakdown}
         AND report_date >= ${from}
         AND report_date <= ${to}
+        ${tagFilter}
       GROUP BY report_date
       ORDER BY report_date ASC
     `
-    return NextResponse.json(data)
   }
 
   if (breakdown === 'daily') {
-    const data = await sql`
+    return sql`
       SELECT config_name, market, device, ads_query,
              COALESCE(SUM(revenue), 0)::float as revenue,
              COALESCE(SUM(amount_eur), 0)::float as amount_eur,
@@ -111,14 +137,14 @@ export async function GET(req: NextRequest) {
         AND breakdown = 'daily'
         AND report_date >= ${from}
         AND report_date <= ${to}
+        ${tagFilter}
       GROUP BY config_name, market, device, ads_query
       ORDER BY SUM(revenue) DESC, SUM(searches) DESC
     `
-    return NextResponse.json(data)
   }
 
-  // ENKI hourly
-  const data = await sql`
+  // hourly
+  return sql`
     SELECT report_date::text as report_date, report_hour,
            config_name, market, device, ads_query,
            COALESCE(SUM(revenue), 0)::float as revenue,
@@ -132,8 +158,8 @@ export async function GET(req: NextRequest) {
       AND breakdown = 'hourly'
       AND report_date >= ${from}
       AND report_date <= ${to}
+      ${tagFilter}
     GROUP BY report_date, report_hour, config_name, market, device, ads_query
     ORDER BY report_date DESC, report_hour ASC, config_name ASC
   `
-  return NextResponse.json(data)
 }

@@ -114,7 +114,40 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // ─── Phase 3: Hourly report for today (re-request only if stale >1h) ───
+  // ─── Phase 3a: Hourly report for yesterday (backfill if incomplete) ───
+  const [yesterdayHourCount] = await sql`
+    SELECT COUNT(DISTINCT report_hour)::int AS cnt FROM report_data
+    WHERE provider = 'enki' AND breakdown = 'hourly' AND report_date = ${yesterday}
+  `
+  const yHours = yesterdayHourCount?.cnt ?? 0
+
+  if (yHours >= 24) {
+    log.push(`hourly ${yesterday}: complete (${yHours}/24h)`)
+  } else {
+    const [activeYesterday] = await sql`
+      SELECT job_id FROM report_jobs
+      WHERE breakdown = 'hourly' AND date_from = ${yesterday}
+        AND status IN ('QUEUED', 'RUNNING')
+      LIMIT 1
+    `
+    if (activeYesterday) {
+      log.push(`hourly ${yesterday}: job ${activeYesterday.job_id} still active, waiting`)
+    } else {
+      try {
+        const { jobId } = await requestReport(yesterday, yesterday, 'hourly')
+        await sql`
+          INSERT INTO report_jobs (job_id, status, breakdown, date_from, date_to)
+          VALUES (${jobId}, 'QUEUED', 'hourly', ${yesterday}, ${yesterday})
+          ON CONFLICT (job_id) DO UPDATE SET status = 'QUEUED', updated_at = NOW()
+        `
+        log.push(`hourly ${yesterday}: only ${yHours}/24h, requested backfill job ${jobId}`)
+      } catch (e) {
+        log.push(`hourly ${yesterday}: backfill error — ${String(e)}`)
+      }
+    }
+  }
+
+  // ─── Phase 3b: Hourly report for today (re-request only if stale >1h) ───
   const [activeHourly] = await sql`
     SELECT job_id FROM report_jobs
     WHERE breakdown = 'hourly' AND date_from = ${today}
