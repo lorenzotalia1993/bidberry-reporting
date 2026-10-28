@@ -1,3 +1,5 @@
+export const maxDuration = 300
+
 import { NextRequest, NextResponse } from 'next/server'
 import { timingSafeEqual } from 'crypto'
 import { getJobStatus, requestReport } from '@/lib/enki'
