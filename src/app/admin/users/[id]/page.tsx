@@ -108,35 +108,78 @@ export default function EditUserPage() {
       {/* Tag Permissions */}
       {!user.is_admin && (
         <div style={s}>
-          <h2 style={{ margin: '0 0 12px', fontSize: 15, fontWeight: 600 }}>Tag Permissions</h2>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>Tag Permissions</h2>
+            <span style={{ fontSize: 12, color: '#888' }}>
+              {selectedTags.length} / {availableTags.length} assegnati
+            </span>
+          </div>
           <input
             type="text"
             value={tagSearch}
             onChange={e => setTagSearch(e.target.value)}
             placeholder="Cerca tag..."
-            style={{ ...inputStyle, width: '100%', marginBottom: 12 }}
+            style={{ ...inputStyle, width: '100%', marginBottom: 16, boxSizing: 'border-box' }}
           />
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-            {availableTags.filter(t => t.toLowerCase().includes(tagSearch.toLowerCase())).map(tag => {
-              const active = selectedTags.includes(tag)
-              return (
-                <button
-                  key={tag}
-                  onClick={() => setSelectedTags(prev => active ? prev.filter(t => t !== tag) : [...prev, tag])}
-                  style={{
-                    background: active ? '#1e40af' : '#1e293b',
-                    color: active ? '#93c5fd' : '#64748b',
-                    border: active ? '1px solid #2563eb' : '1px solid #334155',
-                    borderRadius: 6,
-                    padding: '4px 12px',
-                    fontSize: 13,
-                    cursor: 'pointer',
-                  }}
-                >
-                  {tag}
-                </button>
-              )
-            })}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+            {/* Assegnati */}
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#86efac', textTransform: 'uppercase', marginBottom: 8 }}>
+                ✓ Assegnati ({selectedTags.filter(t => t.toLowerCase().includes(tagSearch.toLowerCase())).length})
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 320, overflowY: 'auto' }}>
+                {selectedTags
+                  .filter(t => t.toLowerCase().includes(tagSearch.toLowerCase()))
+                  .sort()
+                  .map(tag => (
+                    <button
+                      key={tag}
+                      onClick={() => setSelectedTags(prev => prev.filter(t => t !== tag))}
+                      style={{
+                        background: '#14532d', color: '#86efac',
+                        border: '1px solid #166534', borderRadius: 6,
+                        padding: '5px 10px', fontSize: 12, cursor: 'pointer',
+                        textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      }}
+                    >
+                      <span>{tag}</span>
+                      <span style={{ opacity: 0.6, fontSize: 10 }}>rimuovi ✕</span>
+                    </button>
+                  ))}
+                {selectedTags.filter(t => t.toLowerCase().includes(tagSearch.toLowerCase())).length === 0 && (
+                  <div style={{ fontSize: 12, color: '#525252', fontStyle: 'italic', padding: '4px 0' }}>Nessun tag assegnato</div>
+                )}
+              </div>
+            </div>
+            {/* Disponibili */}
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#94a3b8', textTransform: 'uppercase', marginBottom: 8 }}>
+                Disponibili ({availableTags.filter(t => !selectedTags.includes(t) && t.toLowerCase().includes(tagSearch.toLowerCase())).length})
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 320, overflowY: 'auto' }}>
+                {availableTags
+                  .filter(t => !selectedTags.includes(t) && t.toLowerCase().includes(tagSearch.toLowerCase()))
+                  .sort()
+                  .map(tag => (
+                    <button
+                      key={tag}
+                      onClick={() => setSelectedTags(prev => [...prev, tag])}
+                      style={{
+                        background: '#1e293b', color: '#94a3b8',
+                        border: '1px solid #334155', borderRadius: 6,
+                        padding: '5px 10px', fontSize: 12, cursor: 'pointer',
+                        textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      }}
+                    >
+                      <span>{tag}</span>
+                      <span style={{ opacity: 0.5, fontSize: 10 }}>aggiungi +</span>
+                    </button>
+                  ))}
+                {availableTags.filter(t => !selectedTags.includes(t) && t.toLowerCase().includes(tagSearch.toLowerCase())).length === 0 && (
+                  <div style={{ fontSize: 12, color: '#525252', fontStyle: 'italic', padding: '4px 0' }}>Tutti i tag sono assegnati</div>
+                )}
+              </div>
+            </div>
           </div>
           <button onClick={handleTagSave} style={btnStyle}>Salva tag</button>
         </div>
