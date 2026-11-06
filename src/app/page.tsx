@@ -8,7 +8,7 @@ import {
 
 // ── Types ──────────────────────────────────────────────────────────
 type ActiveProvider = 'enki' | 'nexify'
-type ActiveView = 'daily' | 'hourly' | 'analytics'
+type ActiveView = 'daily' | 'hourly' | 'analytics' | 'keywords'
 
 interface DailyRow {
   config_name: string
@@ -57,6 +57,17 @@ interface NexifyDailyRow {
 interface NexifyHourlyRow extends NexifyDailyRow {
   report_date: string
   report_hour: number
+}
+
+interface KeywordInsightRow {
+  ads_query: string
+  market: string
+  revenue: number
+  clicks: number
+  searches: number
+  rpc: number
+  hasHourlyTrend: boolean
+  bestHours: { hour: number; rpc: number }[]
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -294,6 +305,10 @@ export default function Dashboard() {
   const [nexifyLoading, setNexifyLoading] = useState(false)
   const [nexifyFilters, setNexifyFilters] = useState({ domain: '', source: '', device: '', hour: '' })
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null)
+  const [keywordInsights, setKeywordInsights] = useState<KeywordInsightRow[]>([])
+  const [keywordLoading, setKeywordLoading] = useState(false)
+  const [keywordError, setKeywordError] = useState<string | null>(null)
+  const [keywordMarketFilter, setKeywordMarketFilter] = useState('')
 
   const providerLabel = (p: ActiveProvider) =>
     p === 'enki' ? (userInfo?.isAdmin ? 'ENKI' : 'Yahoo') : 'Nexify'
@@ -302,57 +317,157 @@ export default function Dashboard() {
     fetch('/api/me').then(r => r.ok ? r.json() : null).then(setUserInfo)
   }, [])
 
-  const fetchAll = useCallback(async (from: string, to: string) => {
-    if (!from || !to) return
+  // ── Lazy-loading: only fetch what the current view needs ──────
+  // Track which datasets have been loaded for the current date range
+  const loadedRef = useRef<{ from: string; to: string; enkiDaily: boolean; enkiHourly: boolean; enkiTrend: boolean; nexifyDaily: boolean; nexifyHourly: boolean; nexifyTrend: boolean }>({
+    from: '', to: '', enkiDaily: false, enkiHourly: false, enkiTrend: false, nexifyDaily: false, nexifyHourly: false, nexifyTrend: false,
+  })
+
+  // Reset loaded flags when date range changes
+  useEffect(() => {
+    if (loadedRef.current.from !== range.from || loadedRef.current.to !== range.to) {
+      loadedRef.current = { from: range.from, to: range.to, enkiDaily: false, enkiHourly: false, enkiTrend: false, nexifyDaily: false, nexifyHourly: false, nexifyTrend: false }
+      // Clear stale data to free memory
+      setDailyData([])
+      setHourlyData([])
+      setTrendData([])
+      setNexifyDailyData([])
+      setNexifyHourlyData([])
+      setNexifyTrendData([])
+    }
+  }, [range.from, range.to])
+
+  const fetchEnkiDaily = useCallback(async (from: string, to: string) => {
+    if (!from || !to || loadedRef.current.enkiDaily) return
     setLoading(true)
     setError(null)
     try {
-      const [dailyRes, hourlyRes, trendRes] = await Promise.all([
-        fetch(`/api/report-data?${new URLSearchParams({ from, to, breakdown: 'daily' })}`),
-        fetch(`/api/report-data?${new URLSearchParams({ from, to, breakdown: 'hourly' })}`),
-        fetch(`/api/report-data?${new URLSearchParams({ from, to, breakdown: 'trend' })}`),
-      ])
-      if (dailyRes.ok) setDailyData(await dailyRes.json())
-      if (hourlyRes.ok) setHourlyData(await hourlyRes.json())
-      if (trendRes.ok) setTrendData(await trendRes.json())
-      setLastUpdated(new Date())
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setLoading(false)
-    }
+      const res = await fetch(`/api/report-data?${new URLSearchParams({ from, to, breakdown: 'daily' })}`)
+      if (res.ok) { setDailyData(await res.json()); loadedRef.current.enkiDaily = true }
+    } catch (e) { setError(String(e)) }
+    finally { setLoading(false) }
   }, [])
 
-  const fetchData = useCallback(() => {
-    fetchAll(range.from, range.to)
-  }, [fetchAll, range.from, range.to])
+  const fetchEnkiTrend = useCallback(async (from: string, to: string) => {
+    if (!from || !to || loadedRef.current.enkiTrend) return
+    try {
+      const res = await fetch(`/api/report-data?${new URLSearchParams({ from, to, breakdown: 'trend' })}`)
+      if (res.ok) { setTrendData(await res.json()); loadedRef.current.enkiTrend = true }
+    } catch { /* silent */ }
+  }, [])
 
-  const fetchNexify = useCallback(async (from: string, to: string) => {
-    if (!from || !to) return
+  const fetchEnkiHourly = useCallback(async (from: string, to: string) => {
+    if (!from || !to || loadedRef.current.enkiHourly) return
+    setLoading(true)
+    try {
+      const res = await fetch(`/api/report-data?${new URLSearchParams({ from, to, breakdown: 'hourly' })}`)
+      if (res.ok) { setHourlyData(await res.json()); loadedRef.current.enkiHourly = true }
+    } catch (e) { setError(String(e)) }
+    finally { setLoading(false) }
+  }, [])
+
+  const fetchNexifyDaily = useCallback(async (from: string, to: string) => {
+    if (!from || !to || loadedRef.current.nexifyDaily) return
     setNexifyLoading(true)
     try {
-      const [dailyRes, hourlyRes, trendRes] = await Promise.all([
-        fetch(`/api/report-data?${new URLSearchParams({ from, to, breakdown: 'daily', provider: 'nexify' })}`),
-        fetch(`/api/report-data?${new URLSearchParams({ from, to, breakdown: 'hourly', provider: 'nexify' })}`),
-        fetch(`/api/report-data?${new URLSearchParams({ from, to, breakdown: 'trend', provider: 'nexify' })}`),
-      ])
-      if (dailyRes.ok) setNexifyDailyData(await dailyRes.json())
-      if (hourlyRes.ok) setNexifyHourlyData(await hourlyRes.json())
-      if (trendRes.ok) setNexifyTrendData(await trendRes.json())
-    } catch {
-      // silent
+      const res = await fetch(`/api/report-data?${new URLSearchParams({ from, to, breakdown: 'daily', provider: 'nexify' })}`)
+      if (res.ok) { setNexifyDailyData(await res.json()); loadedRef.current.nexifyDaily = true }
+    } catch { /* silent */ }
+    finally { setNexifyLoading(false) }
+  }, [])
+
+  const fetchNexifyTrend = useCallback(async (from: string, to: string) => {
+    if (!from || !to || loadedRef.current.nexifyTrend) return
+    try {
+      const res = await fetch(`/api/report-data?${new URLSearchParams({ from, to, breakdown: 'trend', provider: 'nexify' })}`)
+      if (res.ok) { setNexifyTrendData(await res.json()); loadedRef.current.nexifyTrend = true }
+    } catch { /* silent */ }
+  }, [])
+
+  const fetchNexifyHourly = useCallback(async (from: string, to: string) => {
+    if (!from || !to || loadedRef.current.nexifyHourly) return
+    setNexifyLoading(true)
+    try {
+      const res = await fetch(`/api/report-data?${new URLSearchParams({ from, to, breakdown: 'hourly', provider: 'nexify' })}`)
+      if (res.ok) { setNexifyHourlyData(await res.json()); loadedRef.current.nexifyHourly = true }
+    } catch { /* silent */ }
+    finally { setNexifyLoading(false) }
+  }, [])
+
+  // Fetch what the current view needs — lazy per provider+view
+  useEffect(() => {
+    const { from, to } = range
+    if (!from || !to) return
+
+    if (activeProvider === 'enki') {
+      if (activeView === 'daily') {
+        fetchEnkiDaily(from, to)
+        fetchEnkiTrend(from, to) // needed for summary
+      } else if (activeView === 'hourly') {
+        fetchEnkiHourly(from, to)
+      } else if (activeView === 'analytics') {
+        fetchEnkiDaily(from, to)
+        fetchEnkiTrend(from, to)
+      }
+      // keywords handled separately below
+    } else if (activeProvider === 'nexify') {
+      if (activeView === 'daily') {
+        fetchNexifyDaily(from, to)
+        fetchNexifyTrend(from, to)
+      } else if (activeView === 'hourly') {
+        fetchNexifyHourly(from, to)
+      } else if (activeView === 'analytics') {
+        fetchNexifyDaily(from, to)
+        fetchNexifyTrend(from, to)
+      }
+    }
+  }, [activeProvider, activeView, range, fetchEnkiDaily, fetchEnkiTrend, fetchEnkiHourly, fetchNexifyDaily, fetchNexifyTrend, fetchNexifyHourly])
+
+  const fetchKeywordInsights = useCallback(async (from: string, to: string) => {
+    setKeywordLoading(true)
+    setKeywordError(null)
+    try {
+      const res = await fetch(`/api/report-data?${new URLSearchParams({ from, to, breakdown: 'keyword-insights' })}`)
+      if (res.ok) setKeywordInsights(await res.json())
+      else setKeywordError('Failed to load keyword insights')
+    } catch (e) {
+      setKeywordError(String(e))
     } finally {
-      setNexifyLoading(false)
+      setKeywordLoading(false)
     }
   }, [])
 
-  useEffect(() => { fetchData() }, [fetchData])
-  useEffect(() => { fetchNexify(range.from, range.to) }, [fetchNexify, range.from, range.to])
+  useEffect(() => {
+    if (activeProvider === 'enki' && activeView === 'keywords' && !keywordLoading) {
+      setKeywordInsights([])
+      fetchKeywordInsights(range.from, range.to)
+    }
+  }, [activeProvider, activeView, range.from, range.to, fetchKeywordInsights])
+
+  // Refresh current view data (for periodic refresh / after sync)
+  const refreshCurrentView = useCallback(() => {
+    // Invalidate loaded flags so fetches actually re-run
+    loadedRef.current = { ...loadedRef.current, enkiDaily: false, enkiHourly: false, enkiTrend: false, nexifyDaily: false, nexifyHourly: false, nexifyTrend: false }
+    const { from, to } = range
+    if (activeProvider === 'enki') {
+      if (activeView === 'daily' || activeView === 'analytics') {
+        fetchEnkiDaily(from, to); fetchEnkiTrend(from, to)
+      } else if (activeView === 'hourly') {
+        fetchEnkiHourly(from, to)
+      }
+    } else {
+      if (activeView === 'daily' || activeView === 'analytics') {
+        fetchNexifyDaily(from, to); fetchNexifyTrend(from, to)
+      } else if (activeView === 'hourly') {
+        fetchNexifyHourly(from, to)
+      }
+    }
+  }, [activeProvider, activeView, range, fetchEnkiDaily, fetchEnkiTrend, fetchEnkiHourly, fetchNexifyDaily, fetchNexifyTrend, fetchNexifyHourly])
 
   useEffect(() => {
-    const id = setInterval(() => { fetchData() }, 30 * 60 * 1000)
+    const id = setInterval(refreshCurrentView, 30 * 60 * 1000)
     return () => clearInterval(id)
-  }, [fetchData])
+  }, [refreshCurrentView])
 
   const runSync = useCallback(async () => {
     setSyncing(true)
@@ -360,19 +475,16 @@ export default function Dashboard() {
       const res = await fetch('/api/sync')
       const json = await res.json()
       setSyncLog(json.log ?? [])
-      await Promise.all([
-        fetchAll(range.from, range.to),
-        fetchNexify(range.from, range.to),
-      ])
+      refreshCurrentView()
     } catch {
       // silent
     } finally {
       setSyncing(false)
     }
-  }, [fetchAll, fetchNexify, range.from, range.to])
+  }, [refreshCurrentView])
 
+  // Do NOT run sync on mount — only on interval (every 15 min)
   useEffect(() => {
-    runSync()
     const id = setInterval(runSync, 15 * 60 * 1000)
     return () => clearInterval(id)
   }, [runSync])
@@ -468,25 +580,25 @@ export default function Dashboard() {
   const nexifyStopChannels = useMemo(() => nexifyChannelRPCWithColors.filter(q => q.color === '#ef4444').slice(-5).reverse(), [nexifyChannelRPCWithColors])
 
   // ── ENKI derived ──────────────────────────────────────────────
-  const uniqueDailyConfigs = [...new Set(dailyData.map(r => r.config_name))].filter(Boolean).sort()
-  const uniqueDailyQueries = [...new Set(dailyData.map(r => r.ads_query))].filter(Boolean).sort()
-  const filteredDaily = dailyData.filter(r =>
+  const uniqueDailyConfigs = useMemo(() => [...new Set(dailyData.map(r => r.config_name))].filter(Boolean).sort(), [dailyData])
+  const uniqueDailyQueries = useMemo(() => [...new Set(dailyData.map(r => r.ads_query))].filter(Boolean).sort(), [dailyData])
+  const filteredDaily = useMemo(() => dailyData.filter(r =>
     (!dailyFilters.config || r.config_name === dailyFilters.config) &&
     (!dailyFilters.query || r.ads_query === dailyFilters.query)
-  )
-  const dailyTotals = filteredDaily.reduce(
+  ), [dailyData, dailyFilters.config, dailyFilters.query])
+  const dailyTotals = useMemo(() => filteredDaily.reduce(
     (acc, r) => ({
       revenue: acc.revenue + r.revenue, amount_eur: acc.amount_eur + r.amount_eur,
       clicks: acc.clicks + r.clicks, searches: acc.searches + r.searches,
       bidded_searches: acc.bidded_searches + r.bidded_searches, bidded_results: acc.bidded_results + r.bidded_results,
     }),
     { revenue: 0, amount_eur: 0, clicks: 0, searches: 0, bidded_searches: 0, bidded_results: 0 }
-  )
-  const uniqueConfigs = [...new Set(hourlyData.map(r => r.config_name))].filter(Boolean).sort()
-  const uniqueQueries = [...new Set(hourlyData.map(r => r.ads_query))].filter(Boolean).sort()
-  const uniqueDevices = [...new Set(hourlyData.map(r => r.device))].filter(Boolean).sort()
-  const uniqueHours = [...new Set(hourlyData.map(r => r.report_hour))].sort((a, b) => a - b)
-  const filteredHourly = hourlyData
+  ), [filteredDaily])
+  const uniqueConfigs = useMemo(() => [...new Set(hourlyData.map(r => r.config_name))].filter(Boolean).sort(), [hourlyData])
+  const uniqueQueries = useMemo(() => [...new Set(hourlyData.map(r => r.ads_query))].filter(Boolean).sort(), [hourlyData])
+  const uniqueDevices = useMemo(() => [...new Set(hourlyData.map(r => r.device))].filter(Boolean).sort(), [hourlyData])
+  const uniqueHours = useMemo(() => [...new Set(hourlyData.map(r => r.report_hour))].sort((a, b) => a - b), [hourlyData])
+  const filteredHourly = useMemo(() => hourlyData
     .filter(r =>
       (!filters.config || r.config_name === filters.config) &&
       (!filters.query || r.ads_query === filters.query) &&
@@ -497,73 +609,83 @@ export default function Dashboard() {
       if (String(a.report_date) !== String(b.report_date)) return String(a.report_date).localeCompare(String(b.report_date))
       if (a.report_hour !== b.report_hour) return a.report_hour - b.report_hour
       return a.config_name.localeCompare(b.config_name)
-    })
-  const hourlyTotals = filteredHourly.reduce(
+    }), [hourlyData, filters.config, filters.query, filters.device, filters.hour])
+  const hourlyTotals = useMemo(() => filteredHourly.reduce(
     (acc, r) => ({
       revenue: acc.revenue + r.revenue, amount_eur: acc.amount_eur + r.amount_eur,
       clicks: acc.clicks + r.clicks, searches: acc.searches + r.searches,
       bidded_searches: acc.bidded_searches + r.bidded_searches, bidded_results: acc.bidded_results + r.bidded_results,
     }),
     { revenue: 0, amount_eur: 0, clicks: 0, searches: 0, bidded_searches: 0, bidded_results: 0 }
+  ), [filteredHourly])
+
+  // ── Keyword insights derived ────────────────────────────────────
+  const uniqueKeywordMarkets = [...new Set(keywordInsights.map(r => r.market))].filter(Boolean).sort()
+  const filteredKeywordInsights = keywordInsights.filter(r =>
+    !keywordMarketFilter || r.market === keywordMarketFilter
   )
 
   // ── Nexify derived ────────────────────────────────────────────
-  const uniqueNxDomains = [...new Set(nexifyDailyData.map(r => r.domain))].filter(Boolean).sort()
-  const uniqueNxSources = [...new Set(nexifyDailyData.map(r => r.source_type))].filter(Boolean).sort()
-  const uniqueNxHDomains = [...new Set(nexifyHourlyData.map(r => r.domain))].filter(Boolean).sort()
-  const uniqueNxHSources = [...new Set(nexifyHourlyData.map(r => r.source_type))].filter(Boolean).sort()
-  const uniqueNxHDevices = [...new Set(nexifyHourlyData.map(r => r.device))].filter(Boolean).sort()
-  const uniqueNxHHours = [...new Set(nexifyHourlyData.map(r => r.report_hour))].sort((a, b) => a - b)
-  const filteredNxDaily = nexifyDailyData.filter(r =>
+  const uniqueNxDomains = useMemo(() => [...new Set(nexifyDailyData.map(r => r.domain))].filter(Boolean).sort(), [nexifyDailyData])
+  const uniqueNxSources = useMemo(() => [...new Set(nexifyDailyData.map(r => r.source_type))].filter(Boolean).sort(), [nexifyDailyData])
+  const uniqueNxHDomains = useMemo(() => [...new Set(nexifyHourlyData.map(r => r.domain))].filter(Boolean).sort(), [nexifyHourlyData])
+  const uniqueNxHSources = useMemo(() => [...new Set(nexifyHourlyData.map(r => r.source_type))].filter(Boolean).sort(), [nexifyHourlyData])
+  const uniqueNxHDevices = useMemo(() => [...new Set(nexifyHourlyData.map(r => r.device))].filter(Boolean).sort(), [nexifyHourlyData])
+  const uniqueNxHHours = useMemo(() => [...new Set(nexifyHourlyData.map(r => r.report_hour))].sort((a, b) => a - b), [nexifyHourlyData])
+  const filteredNxDaily = useMemo(() => nexifyDailyData.filter(r =>
     (!nexifyFilters.domain || r.domain === nexifyFilters.domain) &&
     (!nexifyFilters.source || r.source_type === nexifyFilters.source)
-  )
-  const filteredNxHourly = nexifyHourlyData.filter(r =>
+  ), [nexifyDailyData, nexifyFilters.domain, nexifyFilters.source])
+  const filteredNxHourly = useMemo(() => nexifyHourlyData.filter(r =>
     (!nexifyFilters.domain || r.domain === nexifyFilters.domain) &&
     (!nexifyFilters.source || r.source_type === nexifyFilters.source) &&
     (!nexifyFilters.device || r.device === nexifyFilters.device) &&
     (!nexifyFilters.hour || r.report_hour === Number(nexifyFilters.hour))
-  )
-  const nxDailyTotals = filteredNxDaily.reduce(
+  ), [nexifyHourlyData, nexifyFilters.domain, nexifyFilters.source, nexifyFilters.device, nexifyFilters.hour])
+  const nxDailyTotals = useMemo(() => filteredNxDaily.reduce(
     (acc, r) => ({
       revenue: acc.revenue + r.revenue, amount_eur: acc.amount_eur + r.amount_eur,
       clicks: acc.clicks + r.clicks, searches: acc.searches + r.searches,
       bidded_searches: acc.bidded_searches + r.bidded_searches, bidded_results: acc.bidded_results + r.bidded_results,
     }),
     { revenue: 0, amount_eur: 0, clicks: 0, searches: 0, bidded_searches: 0, bidded_results: 0 }
-  )
-  const nxHourlyTotals = filteredNxHourly.reduce(
+  ), [filteredNxDaily])
+  const nxHourlyTotals = useMemo(() => filteredNxHourly.reduce(
     (acc, r) => ({
       revenue: acc.revenue + r.revenue, amount_eur: acc.amount_eur + r.amount_eur,
       clicks: acc.clicks + r.clicks, searches: acc.searches + r.searches,
       bidded_searches: acc.bidded_searches + r.bidded_searches, bidded_results: acc.bidded_results + r.bidded_results,
     }),
     { revenue: 0, amount_eur: 0, clicks: 0, searches: 0, bidded_searches: 0, bidded_results: 0 }
-  )
+  ), [filteredNxHourly])
   const nxTotals = activeView === 'daily' ? nxDailyTotals : nxHourlyTotals
 
-  // Detect incomplete hourly data (less than 24 hours covered)
-  const enkiHoursCovered = new Set(hourlyData.map(r => `${r.report_date}|${r.report_hour}`))
-  const enkiDatesInHourly = [...new Set(hourlyData.map(r => String(r.report_date)))]
-  const enkiIncompleteHourly = enkiDatesInHourly.some(d => {
-    const hoursForDate = [...enkiHoursCovered].filter(h => h.startsWith(d + '|')).length
-    return hoursForDate > 0 && hoursForDate < 24
-  })
-  const enkiHourlySummary = enkiDatesInHourly.map(d => {
-    const count = [...enkiHoursCovered].filter(h => h.startsWith(d + '|')).length
-    return { date: d, hours: count }
-  }).filter(x => x.hours < 24)
+  // Detect incomplete hourly data (less than 24 hours covered) — O(n) using Map
+  const { enkiIncompleteHourly, enkiHourlySummary } = useMemo(() => {
+    const byDate = new Map<string, Set<number>>()
+    for (const r of hourlyData) {
+      const d = String(r.report_date)
+      if (!byDate.has(d)) byDate.set(d, new Set())
+      byDate.get(d)!.add(r.report_hour)
+    }
+    const summary = [...byDate.entries()]
+      .map(([date, hours]) => ({ date, hours: hours.size }))
+      .filter(x => x.hours < 24)
+    return { enkiIncompleteHourly: summary.length > 0, enkiHourlySummary: summary }
+  }, [hourlyData])
 
-  const nxHoursCovered = new Set(nexifyHourlyData.map(r => `${r.report_date}|${r.report_hour}`))
-  const nxDatesInHourly = [...new Set(nexifyHourlyData.map(r => String(r.report_date)))]
-  const nxIncompleteHourly = nxDatesInHourly.some(d => {
-    const hoursForDate = [...nxHoursCovered].filter(h => h.startsWith(d + '|')).length
-    return hoursForDate > 0 && hoursForDate < 24
-  })
-  const nxHourlySummary = nxDatesInHourly.map(d => {
-    const count = [...nxHoursCovered].filter(h => h.startsWith(d + '|')).length
-    return { date: d, hours: count }
-  }).filter(x => x.hours < 24)
+  const { nxIncompleteHourly, nxHourlySummary } = useMemo(() => {
+    const byDate = new Map<string, Set<number>>()
+    for (const r of nexifyHourlyData) {
+      const d = String(r.report_date)
+      if (!byDate.has(d)) byDate.set(d, new Set())
+      byDate.get(d)!.add(r.report_hour)
+    }
+    const summary = [...byDate.entries()]
+      .map(([date, hours]) => ({ date, hours: hours.size }))
+      .filter(x => x.hours < 24)
+    return { nxIncompleteHourly: summary.length > 0, nxHourlySummary: summary }
+  }, [nexifyHourlyData])
 
   return (
     <>
@@ -683,6 +805,9 @@ export default function Dashboard() {
         .config-tag { display: inline-block; padding: 2px 8px; background: #f0efe9;
           border: 1px solid #dddcd8; border-radius: 2px; font-family: 'DM Mono', monospace;
           font-size: 12px; color: #555; }
+        .hour-badge { display: inline-block; padding: 2px 7px; background: #fff8ed;
+          border: 1px solid #c2800a; border-radius: 3px; font-family: 'DM Mono', monospace;
+          font-size: 11px; color: #c2800a; font-weight: 600; }
 
         /* ── Filters ─────────────────────────────────────── */
         .hourly-warning { background: #2a1f00; border: 1px solid #c2800a; color: #f5c542; padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-top: 16px; line-height: 1.4; }
@@ -843,6 +968,14 @@ export default function Dashboard() {
             >
               Analytics
             </button>
+            {activeProvider === 'enki' && (
+              <button
+                className={`sidebar-btn ${activeView === 'keywords' ? 'active' : ''}`}
+                onClick={() => { setActiveView('keywords'); setSidebarOpen(false) }}
+              >
+                Keyword Insights
+              </button>
+            )}
           </nav>
 
           <div className="sidebar-footer">
@@ -872,19 +1005,23 @@ export default function Dashboard() {
             <div>
               <div className="page-title">{providerLabel(activeProvider)}</div>
               <div className="page-subtitle">
-                {activeView === 'daily' ? 'Daily Report' : activeView === 'hourly' ? 'Hourly Report' : 'Analytics'}
+                {activeView === 'daily' ? 'Daily Report' : activeView === 'hourly' ? 'Hourly Report' : activeView === 'keywords' ? 'Keyword Insights' : 'Analytics'}
               </div>
             </div>
-            <div className="date-group">
-              <DatePicker label="From" value={range.from}
-                onChange={v => setRange(r => ({ ...r, from: v }))}
-                maxDate={range.to}
-                onShortcut={(f, t) => setRange({ from: f, to: t })} />
-              <div className="date-sep" />
-              <DatePicker label="To" value={range.to}
-                onChange={v => setRange(r => ({ ...r, to: v }))} />
-            </div>
-            <button className="apply-btn" onClick={fetchData}>Apply</button>
+            {activeView !== 'keywords' && (
+              <>
+                <div className="date-group">
+                  <DatePicker label="From" value={range.from}
+                    onChange={v => setRange(r => ({ ...r, from: v }))}
+                    maxDate={range.to}
+                    onShortcut={(f, t) => setRange({ from: f, to: t })} />
+                  <div className="date-sep" />
+                  <DatePicker label="To" value={range.to}
+                    onChange={v => setRange(r => ({ ...r, to: v }))} />
+                </div>
+                <button className="apply-btn" onClick={refreshCurrentView}>Apply</button>
+              </>
+            )}
           </div>
 
           {error && <div className="error-msg">{error}</div>}
@@ -1007,6 +1144,11 @@ export default function Dashboard() {
                 <span className="my-cut-label">my cut (20%)</span>
                 <span className="my-cut-value">${fmt(hourlyTotals.revenue * 0.2)}</span>
               </div>
+              {filteredHourly.length > 500 && (
+                <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: '#c2800a', margin: '8px 0', padding: '6px 10px', background: '#fff8ed', border: '1px solid #c2800a', borderRadius: 4 }}>
+                  Showing first 500 of {filteredHourly.length.toLocaleString()} rows — use filters to narrow down
+                </div>
+              )}
               <div className="table-wrap">
                 <table>
                   <thead><tr>
@@ -1018,7 +1160,7 @@ export default function Dashboard() {
                       <tr><td colSpan={12}><div className="state-row"><span className="spinner" />Loading…</div></td></tr>
                     ) : filteredHourly.length === 0 ? (
                       <tr><td colSpan={12}><div className="state-row">No data for this period</div></td></tr>
-                    ) : filteredHourly.map((row, i) => (
+                    ) : filteredHourly.slice(0, 500).map((row, i) => (
                       <tr key={i}>
                         <td style={{fontFamily:"'DM Mono',monospace",textAlign:'left',color:'#666'}}>{String(row.report_date).split('T')[0]}</td>
                         <td><span className="hour-badge">{String(row.report_hour).padStart(2,'0')}</span></td>
@@ -1144,6 +1286,106 @@ export default function Dashboard() {
                       </div>
                     </div>
                   )}
+                </>
+              )}
+            </>
+          )}
+
+          {/* ────────────────────────── ENKI Keyword Insights ─── */}
+          {activeProvider === 'enki' && activeView === 'keywords' && (
+            <>
+              {keywordError && <div className="error-msg">{keywordError}</div>}
+              {keywordLoading ? (
+                <div className="state-row"><span className="spinner" />Crunching data…</div>
+              ) : keywordInsights.length === 0 ? (
+                <div className="analytics-empty">No data yet</div>
+              ) : (
+                <>
+                  <div className="filters">
+                    <select className="filter-select" value={keywordMarketFilter} onChange={e => setKeywordMarketFilter(e.target.value)}>
+                      <option value="">All Markets</option>
+                      {uniqueKeywordMarkets.map(v => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                    {keywordMarketFilter && (
+                      <button className="filter-clear" onClick={() => setKeywordMarketFilter('')}>Clear</button>
+                    )}
+                    <div style={{ width: 1, background: '#dddcd8', height: 24, margin: '0 4px' }} />
+                    {[
+                      { label: '7d',         f: () => { const d = new Date(); d.setDate(d.getDate()-6); return { from: toStr(d), to: toStr(new Date()) } } },
+                      { label: '30d',        f: () => { const d = new Date(); d.setDate(d.getDate()-29); return { from: toStr(d), to: toStr(new Date()) } } },
+                      { label: 'MTD',        f: () => { const d = new Date(); d.setDate(1); return { from: toStr(d), to: toStr(new Date()) } } },
+                      { label: 'Last month', f: () => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth()-1); const from = toStr(d); d.setMonth(d.getMonth()+1); d.setDate(0); return { from, to: toStr(d) } } },
+                      { label: 'All time',   f: () => ({ from: '2020-01-01', to: toStr(new Date()) }) },
+                    ].map(({ label, f }) => {
+                      const r = f()
+                      const isActive = range.from === r.from && range.to === r.to
+                      return (
+                        <button key={label} onClick={() => setRange(r)} style={{
+                          padding: '4px 10px', border: '1px solid', borderRadius: 3,
+                          fontFamily: "'Syne',sans-serif", fontSize: 11, fontWeight: 700,
+                          letterSpacing: '0.04em', cursor: 'pointer', transition: 'all 0.1s',
+                          background: isActive ? '#1a1a1a' : '#f0efe9',
+                          borderColor: isActive ? '#1a1a1a' : '#dddcd8',
+                          color: isActive ? '#fff' : '#555',
+                        }}>{label}</button>
+                      )
+                    })}
+                    <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <div className="date-group" style={{ marginTop: 0 }}>
+                        <DatePicker label="From" value={range.from}
+                          onChange={v => setRange(r => ({ ...r, from: v }))}
+                          maxDate={range.to}
+                          onShortcut={(f, t) => setRange({ from: f, to: t })} />
+                        <div className="date-sep" />
+                        <DatePicker label="To" value={range.to}
+                          onChange={v => setRange(r => ({ ...r, to: v }))} />
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: '#999', marginTop: 12, lineHeight: 1.5 }}>
+                    Ranked by RPC (revenue per click) for the selected period. Only keyword/market pairs with at least 15 clicks are shown.
+                    An hourly pattern is only called out when it&apos;s statistically clear — i.e. RPC varies meaningfully by hour, not just noise; otherwise no hours are highlighted.
+                  </div>
+                  <div className="table-wrap" style={{ marginTop: 12 }}>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Keyword</th>
+                          <th>Market</th>
+                          <th>RPC</th>
+                          <th>Revenue</th>
+                          <th>Clicks</th>
+                          <th>Searches</th>
+                          <th style={{ textAlign: 'left' }}>Best Hours</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredKeywordInsights.map((r, i) => (
+                          <tr key={`${r.ads_query}|${r.market}|${i}`}>
+                            <td>{r.ads_query}</td>
+                            <td><span className="config-tag">{r.market}</span></td>
+                            <td className="revenue">${fmt(r.rpc)}</td>
+                            <td>${fmt(r.revenue)}</td>
+                            <td className="clicks">{fmtInt(r.clicks)}</td>
+                            <td>{fmtInt(r.searches)}</td>
+                            <td style={{ textAlign: 'left' }}>
+                              {r.hasHourlyTrend ? (
+                                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                                  {r.bestHours.map(h => (
+                                    <span key={h.hour} className="hour-badge" title={`$${fmt(h.rpc)} RPC`}>
+                                      {String(h.hour).padStart(2, '0')}h
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span style={{ color: '#ccc', fontFamily: "'DM Mono',monospace", fontSize: 11 }}>No clear trend</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </>
               )}
             </>
@@ -1282,7 +1524,7 @@ export default function Dashboard() {
                       <tr><td colSpan={12}><div className="state-row"><span className="spinner" />Loading…</div></td></tr>
                     ) : filteredNxHourly.length === 0 ? (
                       <tr><td colSpan={12}><div className="state-row">No data for this period</div></td></tr>
-                    ) : filteredNxHourly.map((row, i) => (
+                    ) : filteredNxHourly.slice(0, 500).map((row, i) => (
                       <tr key={i}>
                         <td style={{fontFamily:"'DM Mono',monospace",textAlign:'left',color:'#666'}}>{String(row.report_date).split('T')[0]}</td>
                         <td><span className="hour-badge">{String(row.report_hour).padStart(2,'0')}</span></td>
