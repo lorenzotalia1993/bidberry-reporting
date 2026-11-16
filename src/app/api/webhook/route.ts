@@ -63,7 +63,24 @@ export async function processJob(jobId: number) {
     market: row.market || null,
     device: row.device || null,
     placement: row.placement || null,
-    raw: null,
+    raw: JSON.stringify({
+      config_id: row.config_id || null,
+      ad_type: row.ad_type || null,
+      source: row.source || null,
+      adid: row.adid || null,
+      adsetid: row.adsetid || null,
+      campaignid: row.campaignid || null,
+      network: row.network || null,
+      campaign: row.campaign || null,
+      ad: row.ad || null,
+      pla: row.pla || null,
+      lyt: row.lyt || null,
+      tscroll: row.tscroll || null,
+      tq_score: row.tq_score || null,
+      bidded_clicks: row.bidded_clicks || null,
+      amount_usd: row.amount_usd || null,
+      amount_eur: row.amount_eur || null,
+    }),
   }))
 
   // Filter to only rows matching the expected date range (guard against ENKI returning stale data)

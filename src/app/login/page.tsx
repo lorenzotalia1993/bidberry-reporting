@@ -27,7 +27,7 @@ export default function LoginPage() {
         gap: 16,
       }}>
         <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600, textAlign: 'center' }}>
-          BidBerry Login
+          Login
         </h1>
 
         {state?.error && (
